@@ -80,7 +80,8 @@ const __modules = {
     })
     
     const BridgeIpc = Ipc.define({
-      id: "opencode-desktop-bridge.bridge",
+      // The GUI plugin id is the package name, and ctx.provide rejects ids outside it.
+      id: "@alvarolorentedev/opencode-desktop-bridge.bridge",
       methods: {
         snapshot: { output: Snapshot },
         reportServers: { input: ServerReport },

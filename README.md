@@ -12,7 +12,7 @@ The same server list can also be configured from the TUI (`/bridge`) or from the
 
 ## Requirements
 
-- OpenCode Desktop 2.x with the GUI plugin API (`gui-experimental`).
+- OpenCode Desktop 2.x with the GUI plugin API (`gui-experimental`). Pin the package version and upgrade it deliberately: the GUI API is experimental and changes between Desktop releases.
 - Node.js 18+ to build the bundle.
 - OpenCode Mobile (or any OpenCode v2 client) for the phone.
 - Optional: Tailscale, WireGuard, or an authenticated HTTPS tunnel for remote access.
@@ -20,10 +20,10 @@ The same server list can also be configured from the TUI (`/bridge`) or from the
 ## Install
 
 ```bash
-opencode plugin add opencode-desktop-bridge
+opencode plugin add @alvarolorentedev/opencode-desktop-bridge
 ```
 
-Restart OpenCode Desktop, then open **Settings › Desktop Bridge** and turn it on. The plugin ships a GUI part and a TUI part; it adds no separate daemon and never modifies Desktop.
+`plugin add` writes the global `opencode.json(c)`, which is where Desktop reads plugins. Restart OpenCode Desktop, then open **Settings › Desktop Bridge** and turn it on. The plugin ships a GUI part and a TUI part; it adds no separate daemon and never modifies Desktop.
 
 To build from source:
 
@@ -31,7 +31,27 @@ To build from source:
 node scripts/build.mjs
 ```
 
-Then add the package with your usual OpenCode plugin configuration (or `opencode plugin add` once published).
+Then add this directory to `plugins` in `opencode.json(c)`.
+
+## Release
+
+Tag `v<version>` after bumping `package.json`; `.github/workflows/release.yml` tests, publishes to npm with OIDC trusted publishing (no token), and creates the GitHub release.
+
+Trusted publishing needs a one-time setup, because a package must exist before npm accepts a trusted publisher:
+
+1. `npm login` with 2FA enabled on the account, then `npm publish` for `0.1.0`.
+2. Register the workflow, either on npmjs.com under **Settings › Trusted publishing** (GitHub Actions, user `alvarolorentedev`, repository `opencode-desktop-bridge`, workflow `release.yml`) with **Allow npm publish** checked, or:
+
+   ```bash
+   npm trust github @alvarolorentedev/opencode-desktop-bridge \
+     --repository alvarolorentedev/opencode-desktop-bridge \
+     --file release.yml \
+     --allow-publish
+   ```
+
+   New configurations allow only staged publishes by default, so `--allow-publish` is not optional.
+3. Use it within 2 days: an unvalidated configuration expires. Bump to `0.1.1`, tag `v0.1.1`, and push the tag.
+4. Optional hardening: **Settings › Publishing access › Require two-factor authentication and disallow tokens**.
 
 ## Pair a phone
 
