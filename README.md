@@ -158,7 +158,7 @@ See [docs/architecture.md](docs/architecture.md) and [docs/limits.md](docs/limit
 
 ```bash
 node scripts/build.mjs   # dist/gui-experimental.cjs
-node --test test/        # core, catalog, control, HTTP, SSE, WebSocket, bundle, web and plugin-main tests
+node --test               # core, catalog, control, HTTP, SSE, WebSocket, bundle, web and plugin-main tests
 ```
 
 The core has no Electron dependency: it takes server resolution, device storage, native pairing and the catalog sources as injected functions, so the proxy, aggregation and control plane are tested against real HTTP/SSE/TCP servers. See [docs/architecture.md](docs/architecture.md).

@@ -41,7 +41,7 @@ jobs:
           fi
 
       - name: Tests
-        run: node --test test/
+        run: node --test
 
       # No NODE_AUTH_TOKEN. npm exchanges the GitHub OIDC token for a
       # short-lived publish credential using the package's trusted publisher.
