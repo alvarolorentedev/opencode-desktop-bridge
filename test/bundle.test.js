@@ -69,3 +69,11 @@ test("the package exposes the server tunnel part", () => {
   assert.equal(pkg.dependencies["@opentunnel/client"], "0.7.0")
   assert.equal(typeof pkg.dependencies["qrcode-generator"], "string")
 })
+
+test("the server and GUI parts share the package plugin id", () => {
+  const pkg = require("../package.json")
+  const server = readFileSync(path.join(__dirname, "..", "src", "server.mjs"), "utf8")
+  const contract = readFileSync(path.join(__dirname, "..", "src", "gui", "contract.js"), "utf8")
+  assert.ok(server.includes(`id: "${pkg.name}"`), "server plugin id is the package id")
+  assert.ok(contract.includes(`id: "${pkg.name}.bridge"`), "Ipc id is under the package id")
+})

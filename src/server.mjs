@@ -3,7 +3,7 @@ import { createRemote } from "./core/remote.mjs"
 import { BridgeRemote, createHandlers } from "./server-rpc.mjs"
 
 export default Plugin.define({
-  id: "opencode-desktop-bridge.server",
+  id: "@alvarolorentedev/opencode-desktop-bridge",
   async setup(context) {
     const remote = createRemote({
       createClient: async () => {

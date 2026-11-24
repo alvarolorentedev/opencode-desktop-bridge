@@ -3352,7 +3352,7 @@ const __modules = {
     const { requestJson } = require("@b/core/http.js")
     const { basicAuth, errorMessage, randomId } = require("@b/core/util.js")
     
-    const VERSION = "0.2.1"
+    const VERSION = "0.2.2"
     const RPC_ID = "desktop-bridge.remote"
     const REMOTE_TIMEOUT = 180000
     
