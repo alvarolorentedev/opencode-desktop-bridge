@@ -40,6 +40,9 @@ jobs:
             exit 1
           fi
 
+      - name: Install
+        run: npm ci
+
       - name: Tests
         run: node --test
 

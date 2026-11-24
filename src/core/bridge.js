@@ -88,6 +88,20 @@ function createBridge(options) {
     return value || `http://127.0.0.1:${state.port}`
   }
 
+  // The admin API changes the catalog and holds the admin token. It stays on
+  // this computer even when the data plane is reachable through a tunnel.
+  function adminAllowed(req) {
+    const host = req.headers.host
+    if (typeof host !== "string" || !host) return false
+    let hostname
+    try {
+      hostname = new URL(`http://${host}`).hostname
+    } catch {
+      return false
+    }
+    return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1" || hostname === "[::1]"
+  }
+
   function addDirectory(directory, serverId) {
     if (typeof directory !== "string" || !directory) return
     const owners = state.directories.get(directory) || new Set()
@@ -562,6 +576,10 @@ function createBridge(options) {
       return
     }
     if (control && control.match(pathname)) {
+      if (!adminAllowed(req)) {
+        sendJson(res, 403, { message: "The bridge admin API is available on this computer only." })
+        return
+      }
       await control.handle(req, res, pathname, url.searchParams)
       return
     }

@@ -13,7 +13,11 @@ const DEFAULT_CONFIG = {
   publicUrl: "",
   hiddenServers: [],
   configServer: "sidecar",
+  remoteEnabled: false,
+  remoteRoute: "",
 }
+
+const ROUTE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
 
 function loopback(host) {
   return host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]"
@@ -43,6 +47,10 @@ function normalizeConfig(input) {
   const hiddenServers = Array.isArray(config.hiddenServers)
     ? [...new Set(config.hiddenServers.filter((id) => typeof id === "string" && id))]
     : []
+  const remoteRoute =
+    typeof config.remoteRoute === "string" && config.remoteRoute.length <= 63 && ROUTE.test(config.remoteRoute)
+      ? config.remoteRoute
+      : ""
   return {
     value: {
       enabled: Boolean(config.enabled),
@@ -51,6 +59,8 @@ function normalizeConfig(input) {
       publicUrl: publicUrl.value,
       hiddenServers,
       configServer: typeof config.configServer === "string" && config.configServer ? config.configServer : "sidecar",
+      remoteEnabled: Boolean(config.remoteEnabled),
+      remoteRoute,
     },
     basePath: publicUrl.basePath,
     error: publicUrl.error,

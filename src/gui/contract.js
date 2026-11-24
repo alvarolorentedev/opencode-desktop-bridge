@@ -10,6 +10,8 @@ const Config = Schema.Struct({
   publicUrl: Schema.String,
   hiddenServers: Schema.Array(Schema.String),
   configServer: Schema.String,
+  remoteEnabled: Schema.optional(Schema.Boolean),
+  remoteRoute: Schema.optional(Schema.String),
 })
 
 const Server = Schema.Struct({
@@ -37,9 +39,16 @@ const Status = Schema.Struct({
   port: Schema.Number,
 })
 
+const Remote = Schema.Struct({
+  state: Schema.String,
+  url: Schema.String,
+  error: Schema.String,
+})
+
 const Snapshot = Schema.Struct({
   config: Config,
   status: Status,
+  remote: Remote,
   servers: Schema.Array(Server),
   devices: Schema.Array(Device),
   sidecarReady: Schema.Boolean,
@@ -67,7 +76,16 @@ const Network = Schema.Struct({
 const Pairing = Schema.Struct({
   link: Schema.String,
   command: Schema.String,
+  code: Schema.String,
+  urls: Schema.Array(Schema.String),
+  qr: Schema.String,
+  base: Schema.String,
+  remote: Schema.Boolean,
   expiresAt: Schema.Number,
+})
+
+const PairInput = Schema.Struct({
+  mode: Schema.Union(Schema.Literal("remote"), Schema.Literal("local")),
 })
 
 const Token = Schema.Struct({
@@ -82,13 +100,14 @@ const BridgeIpc = Ipc.define({
     snapshot: { output: Snapshot },
     reportServers: { input: ServerReport },
     setEnabled: { input: Schema.Boolean, output: Snapshot },
+    setRemote: { input: Schema.Boolean, output: Snapshot },
     setNetwork: { input: Network, output: Snapshot },
     setHidden: { input: Schema.Array(Schema.String), output: Snapshot },
     setConfigServer: { input: Schema.String, output: Snapshot },
     revokeDevice: { input: Schema.String, output: Snapshot },
     createDevice: { input: Schema.String, output: Token },
-    pair: { output: Pairing },
+    pair: { input: PairInput, output: Pairing },
   },
 })
 
-module.exports = { BridgeIpc, Config, Device, Snapshot, ServerReport, Network, Pairing, Status, Token }
+module.exports = { BridgeIpc, Config, Device, Snapshot, ServerReport, Network, Pairing, PairInput, Status, Token, Remote }

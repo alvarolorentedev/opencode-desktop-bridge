@@ -11,7 +11,7 @@ OpenCode Mobile / any v2 client
         ▼
 opencode-desktop-bridge (OpenCode Desktop GUI plugin, main process)
   ├─ synthetic     /api/info, /api/health, /api/event, /auth/connect/:code
-  ├─ control       /bridge/v1/admin/* (admin token, TUI + web sources)
+  ├─ control       /bridge/v1/admin/* (admin token, loopback Host only)
   ├─ aggregate     projects, sessions, pending permissions/forms, PTYs
   ├─ route         session ID · PTY ID · directory · project ID
   └─ config server /api/config, /api/model, /api/agent, … 
@@ -20,18 +20,29 @@ opencode-desktop-bridge (OpenCode Desktop GUI plugin, main process)
         ├────────────► remote OpenCode server A
         ├────────────► remote OpenCode server B
         └────────────► TUI / web manual servers
+
+Phone ──https──► <route>.<tunnel-hostname> ──► OpenTunnel
+                                              │
+                    OpenCode server plugin ───┘
+                    (server part, owns the route)
+                              │ forwards to
+                              ▼
+                    bridge listener 127.0.0.1:<port>
 ```
 
-The bridge is a **virtual OpenCode server**: one API surface, one device token, one mobile profile. It is not a new execution engine and does not copy conversations. Every session, message, permission and terminal belongs to one real upstream server, which remains the source of truth.
+The internet route is claimed by the plugin's **server part**, not by the Desktop main process. The server part is loaded by the OpenCode server that loads the plugin, so it has the plugin's `@opentunnel/client` dependency and the same device tunnel as `opencode pair --remote`. Desktop main asks it to attach/detach over a local plugin RPC (`/api/rpc/desktop-bridge.remote/*`) and receives the public bridge URL.
+
+The bridge is a **virtual OpenCode server**: one API surface, one device token, one normal mobile profile per paired address. It is not a new execution engine and does not copy conversations. Every session, message, permission and terminal belongs to one real upstream server, which remains the source of truth.
 
 ## Runtime
 
-- The GUI plugin’s **main entry** runs in Electron’s main process with Node built-ins. It hosts the HTTP listener, the admin control plane and WebSocket tunnels itself; there is no companion daemon.
+- The GUI plugin’s **main entry** runs in Electron’s main process with Node built-ins. It hosts the HTTP listener, the admin control plane, WebSocket tunnels and the pairing UI itself; there is no companion daemon.
 - The GUI plugin’s **window entry** contributes the Desktop settings page and reports the Desktop server list to main through the plugin Ipc.
 - The **web window** runs the same `setup` with `ctx.desktop` false. It contributes the web settings page and does not report a server list.
+- The **server part** runs in the local OpenCode server. It registers the `desktop-bridge.remote` RPC, owns the OpenTunnel connection and generates pairing QR SVGs.
 - The **TUI part** contributes the `/bridge` command. It writes the `tui` source through the admin control plane.
 - Main reads Desktop URLs and credentials from `ctx.serverEndpoints.get(id)` at request time. Desktop credentials never leave the main process. TUI and web credentials are sent over the admin API and stored in plugin storage; a TLS terminator in front sees them. The mobile client never receives upstream credentials.
-- The listener starts only when the user enables the bridge. `ctx.onCleanup` closes it; changing host, port or public URL restarts it.
+- The listener starts only when **Share servers** is enabled. `ctx.onCleanup` closes it; changing host, port or public URL restarts it. If a remote route was wanted, main re-attaches it after the listener restarts.
 
 ## Sources and catalog
 
@@ -43,7 +54,7 @@ The bridge exposes one server list built by `src/core/catalog.js` from three sou
 
 Entries are deduplicated by normalized URL, with Desktop first. The hidden list and the configuration-server selection apply to IDs from every source.
 
-`src/core/control.js` is the admin control plane on the bridge listener. It accepts `GET /bridge/v1/admin/status`, `/servers`, `/sources/:source`, `PUT|POST /bridge/v1/admin/servers/:source`, `DELETE /bridge/v1/admin/servers/:source/:id`, and `POST /bridge/v1/admin/pair`. Every route requires the bridge admin token; the route handles CORS for the web settings page. It never carries conversation data and never exposes upstream passwords.
+`src/core/control.js` is the admin control plane on the bridge listener. It accepts `GET /bridge/v1/admin/status`, `/servers`, `/sources/:source`, `PUT|POST /bridge/v1/admin/servers/:source`, `DELETE /bridge/v1/admin/servers/:source/:id`, and `POST /bridge/v1/admin/pair`. Every route requires the bridge admin token; the route handles CORS for the web settings page. It never carries conversation data and never exposes upstream passwords. `bridge.js` refuses admin requests whose `Host` is not loopback, so the tunnel cannot reach the control plane.
 
 The data plane is unchanged: it still requires a bridge device token. The control plane only changes which servers the catalog exposes.
 
@@ -65,23 +76,28 @@ ctx.servers.list()/get()  ──Ipc──► registry.report(window, [{id,name,c
 The bridge is not a pairing issuer.
 
 ```text
-opencode pair --url <bridge>          Settings › Create pairing link
-       │                                       │
-       └──────────► Desktop background service ─┘
-                    POST /api/pair → 5-minute, single-use code
-                                   │
-phone scans link / QR              │
-       │                           │
-       ▼                           │
-GET <bridge>/auth/connect/<code> ──┘
-       │
-       ├─ bridge → Desktop sidecar: GET /auth/connect/<code> (Accept: application/json)
-       │            sidecar consumes the code, returns a native token
-       ├─ bridge discards the native token
-       └─ bridge issues brg1_… device token (SHA-256 stored, 30-day expiry)
+Settings › Pair over the internet
+        │
+        ├─ main → server part RPC attach(route, target)
+        │            server part → OpenTunnel connect (same default device tunnel as Remote access)
+        │            server part returns https://<route>.<tunnel-hostname>
+        │
+        └─ main → Desktop sidecar: POST /api/pair → 5-minute, single-use code
+                     │
+phone scans QR                           │
+        │                                │
+        ▼                                │
+GET <bridge-route>/auth/connect/<code> ──┘
+        │
+        ├─ bridge → Desktop sidecar: GET /auth/connect/<code> (Accept: application/json)
+        │            sidecar consumes the code, returns a native token
+        ├─ bridge discards the native token
+        └─ bridge issues brg1_… device token (SHA-256 stored, 30-day expiry)
 ```
 
-Using the sidecar code as proof means the native pairing service remains the authority, while the phone receives a credential scoped to the bridge. Revoking a device is bridge-local and immediate.
+**Pair on this network** skips the tunnel step and uses the configured bind address (or `publicUrl`). Both modes issue the same native code and the same bridge device token; a phone may pair once per address. The QR payload is the native `{ code, urls }` shape, so no mobile changes are needed.
+
+Using the sidecar code as proof means the native pairing service remains the authority, while the phone receives a credential scoped to the bridge. Revoking a device is bridge-local and immediate. If the local server restarts, the server part loses the OpenTunnel route; main's 10-second status check re-attaches it and the phone reconnects.
 
 ## Routing
 
@@ -134,15 +150,20 @@ They are learned from list responses, create responses and events. Removing a se
 - A completely unreachable set returns `502` with a generic message, never an upstream URL.
 - A removed target returns `404` for its sessions and disappears from lists.
 - The bridge binds one port. If the port is in use it reports an error and stays off rather than silently changing ports, so saved mobile profiles keep working.
+- Internet pairing failing never stops local pairing. The platform route is separate from the listener; a failed attach leaves the local listener and existing LAN profiles intact.
+- If the sidecar or its server part restarts, the tunnel route is lost. Main probes the remote status every 10 seconds and re-attaches while internet access is wanted.
 
 ## Repository layout
 
 ```text
 src/core/       Node-only: routing, catalog, control plane, HTTP/WS proxy, merge, SSE, devices, bridge server
+src/core/remote.mjs  OpenTunnel controller (server part only; no Electron dependency)
 src/gui/        Plugin.define, main entry, desktop settings page, web settings page, Ipc contract
+src/server.mjs       Server plugin entry: registers the remote RPC and owns the tunnel
+src/server-rpc.mjs   RPC definition, handlers and QR encoder
 src/tui.ts      TUI `/bridge` control surface
 scripts/        dependency-free CommonJS bundle builder
-test/           unit, catalog, control, HTTP aggregates/routing, SSE, WebSocket, web UI, bundle, plugin-main
+test/           unit, catalog, control, HTTP aggregates/routing, SSE, WebSocket, web/desktop UI, remote tunnel, bundle, plugin-main
 ```
 
-`src/core` is built and tested without Electron. `scripts/build.mjs` inlines the modules into one `dist/gui-experimental.cjs` because the desktop host evaluates a single CommonJS bundle with its own `require` of provided modules. The TUI part is loaded directly by the TUI from the package's `./tui` export.
+`src/core` is built and tested without Electron. `scripts/build.mjs` inlines the modules into one `dist/gui-experimental.cjs` because the desktop host evaluates a single CommonJS bundle with its own `require` of provided modules. The TUI part is loaded directly by the TUI from the package's `./tui` export; the server part is loaded by the OpenCode server from `./server`.

@@ -115,30 +115,35 @@ function renderPage(ctx, ipc, t) {
   }
 
   const statusText = el("div", { class: "odb-muted" }, t("mainStarting"))
+  const remoteText = el("div", { class: "odb-muted odb-code" }, t("remoteOff"))
   const enable = el("input", { type: "checkbox" })
-  const host = el("input", { class: "odb-input", value: "127.0.0.1", spellcheck: "false" })
-  const port = el("input", { class: "odb-input", value: "47821", inputmode: "numeric" })
-  const publicUrl = el("input", { class: "odb-input", placeholder: "https://…", spellcheck: "false" })
-  const save = el("button", { class: "odb-button" }, t("save"))
-  const warning = el("div", { class: "odb-warning" })
-  warning.style.display = "none"
+  const pairRemote = el("button", { class: "odb-button odb-primary" }, t("pairRemote"))
+  const pairLocal = el("button", { class: "odb-button" }, t("pairLocal"))
+  const retry = el("button", { class: "odb-button" }, t("retry"))
+  retry.style.display = "none"
   const errorBox = el("div", { class: "odb-error" })
   const serversBox = el("div", { class: "odb-list" })
   const devicesBox = el("div", { class: "odb-list" })
   const pairBox = el("div", { class: "odb-card" })
-  const diagBox = el("div", { class: "odb-list" })
+  const configServerBox = el("div", { class: "odb-list" })
   const tuiWebBox = el("div", { class: "odb-list" })
+  const diagBox = el("div", { class: "odb-list" })
+  const host = el("input", { class: "odb-input", value: "127.0.0.1", spellcheck: "false" })
+  const port = el("input", { class: "odb-input", value: "47821", inputmode: "numeric" })
+  const publicUrl = el("input", { class: "odb-input", placeholder: "https://…", spellcheck: "false" })
+  const save = el("button", { class: "odb-button" }, t("save"))
+  const disableRemote = el("button", { class: "odb-button" }, t("disableRemote"))
+  const advancedToggle = el("button", { class: "odb-button" }, t("advanced"))
+  const advancedBody = el("div", { class: "odb" })
+  advancedBody.style.display = "none"
 
   let snapshot
   let pairing
   let tuiToken
+  let showAdvanced = false
 
   function showError(error) {
     errorBox.textContent = error instanceof Error ? error.message : String(error || "")
-  }
-
-  function commandFor(base) {
-    return `opencode pair --url ${base}`
   }
 
   function copy(value, button) {
@@ -150,6 +155,15 @@ function renderPage(ctx, ipc, t) {
     })
   }
 
+  function isLoopbackBase(value) {
+    try {
+      const hostname = new URL(value).hostname
+      return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1" || hostname === "[::1]"
+    } catch {
+      return true
+    }
+  }
+
   function renderServers(snap) {
     clear(serversBox)
     if (!snap.servers.length) {
@@ -159,7 +173,7 @@ function renderPage(ctx, ipc, t) {
     for (const server of snap.servers) {
       const checkbox = el("input", { type: "checkbox", checked: server.exposed })
       checkbox.onchange = async () => {
-        const hidden = new Set(snap.config.hiddenServers)
+        const hidden = new Set(snap.config.hiddenServers || [])
         if (checkbox.checked) hidden.delete(server.id)
         else hidden.add(server.id)
         try {
@@ -174,22 +188,7 @@ function renderPage(ctx, ipc, t) {
         el("span", { class: "odb-item-name" }, server.name),
         el("span", { class: "odb-muted" }, server.source && server.source !== "desktop" ? server.source : server.id === "sidecar" ? "desktop" : server.connected ? "" : "offline"),
       ])
-      const actions = el("div", { class: "odb-actions" }, [])
-      if (server.configServer) {
-        actions.append(el("span", { class: "odb-tag" }, t("configServer")))
-      } else if (server.exposed) {
-        const use = el("button", { class: "odb-button" }, t("useForConfig"))
-        use.onclick = async () => {
-          try {
-            snapshot = await ipc.setConfigServer(server.id)
-            apply(snapshot)
-          } catch (error) {
-            showError(error)
-          }
-        }
-        actions.append(use)
-      }
-      serversBox.append(el("div", { class: "odb-row" }, [label, actions]))
+      serversBox.append(label)
     }
   }
 
@@ -221,39 +220,62 @@ function renderPage(ctx, ipc, t) {
     }
   }
 
-  function renderPairing(snap) {
-    clear(pairBox)
-    const base = snap.status.baseUrl || snap.status.addresses[0] || ""
-    const hint = el("div", { class: "odb-muted" }, t("pairingHint"))
-    if (pairing) {
-      const link = el("div", { class: "odb-code" }, pairing.link)
-      const command = el("div", { class: "odb-code" }, pairing.command)
-      const copyLink = el("button", { class: "odb-button" }, t("copy"))
-      copyLink.onclick = () => copy(pairing.link, copyLink)
-      const copyCommand = el("button", { class: "odb-button" }, t("copy"))
-      copyCommand.onclick = () => copy(pairing.command, copyCommand)
-      const expires = el("div", { class: "odb-muted" }, `Expires ${new Date(pairing.expiresAt).toLocaleTimeString()}`)
-      pairBox.append(link, el("div", { class: "odb-actions" }, [copyLink]), command, el("div", { class: "odb-actions" }, [copyCommand]), expires, hint)
+  function renderConfigServer(snap) {
+    clear(configServerBox)
+    const options = snap.servers.filter((server) => server.exposed || server.configServer)
+    if (!options.length) {
+      configServerBox.append(el("div", { class: "odb-muted" }, t("notReady")))
       return
     }
-    const pair = el("button", { class: "odb-button" }, t("pair"))
-    pair.onclick = async () => {
+    const select = el("select", { class: "odb-input" })
+    for (const server of options) {
+      const option = el("option", { value: server.id }, server.name)
+      if (server.configServer) option.selected = true
+      select.append(option)
+    }
+    select.onchange = async () => {
       try {
-        pairing = await ipc.pair()
-        renderPairing(snapshot)
+        snapshot = await ipc.setConfigServer(select.value)
+        apply(snapshot)
       } catch (error) {
         showError(error)
       }
     }
-    const manual = el("div", { class: "odb-code" }, commandFor(base))
-    const copyCommand = el("button", { class: "odb-button" }, t("copy"))
-    copyCommand.onclick = () => copy(commandFor(base), copyCommand)
-    pairBox.append(pair, el("div", { class: "odb-actions" }, [copyCommand]), manual, hint)
+    configServerBox.append(select)
+  }
+
+  function renderPairing(snap) {
+    clear(pairBox)
+    if (!pairing || pairing.expiresAt < Date.now()) {
+      pairBox.append(el("div", { class: "odb-muted" }, t("pairingEmpty")))
+      return
+    }
+    if (pairing.qr) {
+      const qr = el("div", { class: "odb-qr" })
+      qr.innerHTML = pairing.qr
+      pairBox.append(qr)
+    }
+    pairBox.append(el("div", { class: "odb-code" }, pairing.link))
+    pairBox.append(el("div", { class: "odb-code" }, pairing.command))
+    const actions = el("div", { class: "odb-actions" }, [])
+    const copyLink = el("button", { class: "odb-button" }, t("copyLink"))
+    copyLink.onclick = () => copy(pairing.link, copyLink)
+    const copyCommand = el("button", { class: "odb-button" }, t("copyCommand"))
+    copyCommand.onclick = () => copy(pairing.command, copyCommand)
+    const again = el("button", { class: "odb-button" }, t("newCode"))
+    again.onclick = () => startPairing(pairing.remote ? "remote" : "local")
+    actions.append(copyLink, copyCommand, again)
+    pairBox.append(actions)
+    pairBox.append(el("div", { class: "odb-muted" }, `Expires ${new Date(pairing.expiresAt).toLocaleTimeString()}`))
+    pairBox.append(el("div", { class: "odb-muted" }, pairing.remote ? t("pairRemoteHint") : t("pairLocalHint")))
+    if (!pairing.remote && isLoopbackBase(pairing.base)) {
+      pairBox.append(el("div", { class: "odb-warning" }, t("localOnly")))
+    }
   }
 
   function renderTuiWeb(snap) {
     clear(tuiWebBox)
-    const base = snap.status.baseUrl || snap.status.addresses[0] || ""
+    const base = `http://127.0.0.1:${snap.status.port}`
     const admin = el("input", { class: "odb-input", value: snap.adminToken || "", readonly: "readonly", spellcheck: "false" })
     const copyAdmin = el("button", { class: "odb-button" }, t("copy"))
     copyAdmin.onclick = () => copy(snap.adminToken || "", copyAdmin)
@@ -318,6 +340,7 @@ function renderPage(ctx, ipc, t) {
         ]),
       )
     line(t("bridgeUrl"), snap.status.baseUrl || "—")
+    line(t("remote"), snap.remote && snap.remote.url ? snap.remote.url : t("remoteOff"))
     line(t("addresses"), snap.status.addresses.join("  ·  ") || "—")
     line(t("version"), `bridge ${snap.bridgeVersion} · desktop ${snap.appVersion}`)
     line(t("desktopServer"), snap.sidecarReady ? t("ready") : t("notReady"))
@@ -328,25 +351,29 @@ function renderPage(ctx, ipc, t) {
     const state = snap.status.state
     statusText.textContent =
       state === "running"
-        ? `${t("running")} · ${snap.status.baseUrl}`
+        ? t("running")
         : state === "starting"
           ? t("starting")
           : state === "error"
             ? `${t("failed")} · ${snap.status.error}`
             : t("stopped")
-    enable.checked = snap.config.enabled
+    const remote = snap.remote || { state: "off", url: "", error: "" }
+    remoteText.textContent =
+      remote.state === "on"
+        ? `${t("remoteOn")} · ${remote.url}`
+        : remote.state === "starting"
+          ? t("remoteStarting")
+          : remote.state === "error"
+            ? `${t("remoteFailed")} ${remote.error}`
+            : t("remoteOff")
+    retry.style.display = remote.state === "error" ? "" : "none"
+    disableRemote.style.display = snap.config.remoteEnabled ? "" : "none"
+    enable.checked = Boolean(snap.config.enabled)
     if (document.activeElement !== host) host.value = snap.config.host
     if (document.activeElement !== port) port.value = String(snap.config.port)
-    if (document.activeElement !== publicUrl) publicUrl.value = snap.config.publicUrl
-    warning.textContent = t("loopbackWarning")
-    let baseHost = ""
-    try {
-      baseHost = new URL(snap.status.baseUrl || "http://127.0.0.1").hostname
-    } catch {
-      baseHost = ""
-    }
-    warning.style.display = !snap.config.publicUrl && isLoopback(baseHost) ? "block" : "none"
+    if (document.activeElement !== publicUrl) publicUrl.value = snap.config.publicUrl || ""
     renderServers(snap)
+    renderConfigServer(snap)
     renderDevices(snap)
     if (pairing && pairing.expiresAt < Date.now()) pairing = undefined
     renderPairing(snap)
@@ -369,10 +396,49 @@ function renderPage(ctx, ipc, t) {
   }
   let refreshing = false
 
+  async function startPairing(mode) {
+    errorBox.textContent = ""
+    pairRemote.disabled = true
+    pairLocal.disabled = true
+    try {
+      if (!snapshot || !snapshot.config.enabled) {
+        snapshot = await ipc.setEnabled(true)
+        apply(snapshot)
+      }
+      pairing = await ipc.pair({ mode })
+      renderPairing(snapshot)
+      apply(await ipc.snapshot())
+    } catch (error) {
+      showError(error)
+    } finally {
+      pairRemote.disabled = false
+      pairLocal.disabled = false
+    }
+  }
+
   enable.onchange = async () => {
     try {
       pairing = undefined
       apply(await ipc.setEnabled(enable.checked))
+    } catch (error) {
+      showError(error)
+    }
+  }
+
+  pairRemote.onclick = () => startPairing("remote")
+  pairLocal.onclick = () => startPairing("local")
+
+  retry.onclick = async () => {
+    try {
+      apply(await ipc.setRemote(true))
+    } catch (error) {
+      showError(error)
+    }
+  }
+
+  disableRemote.onclick = async () => {
+    try {
+      apply(await ipc.setRemote(false))
     } catch (error) {
       showError(error)
     }
@@ -393,22 +459,36 @@ function renderPage(ctx, ipc, t) {
     }
   }
 
+  advancedToggle.onclick = () => {
+    showAdvanced = !showAdvanced
+    advancedBody.style.display = showAdvanced ? "" : "none"
+    advancedToggle.textContent = showAdvanced ? t("hideAdvanced") : t("advanced")
+  }
+
+  advancedBody.append(
+    row(t("host"), t("hostHint"), host),
+    row(t("port"), t("portHint"), port),
+    row(t("publicUrl"), t("publicUrlHint"), publicUrl),
+    row(null, null, el("div", { class: "odb-actions" }, [save])),
+    row(t("configServer"), t("configServerHint"), configServerBox),
+    row(t("remote"), t("disableRemoteHint"), disableRemote),
+    row(t("tuiWeb"), t("tuiWebHint"), null),
+    tuiWebBox,
+    row(t("diagnostics"), null, null),
+    diagBox,
+  )
+
   const root = el("div", { class: "odb" }, [
-    warning,
-    section(t("status"), [
-      row(t("status"), statusText, el("label", { class: "odb-item" }, [enable, el("span", {}, t("enabled"))])),
-    ]),
-    section(t("network"), [
-      row(t("host"), t("hostHint"), host),
-      row(t("port"), t("portHint"), port),
-      row(t("publicUrl"), t("publicUrlHint"), publicUrl),
-      row(null, null, el("div", { class: "odb-actions" }, [save])),
+    section(t("shareServers"), [
+      row(null, t("shareServersHint"), el("label", { class: "odb-item" }, [enable, el("span", {}, t("enabled"))])),
+      row(t("status"), statusText, null),
+      row(t("remote"), remoteText, el("div", { class: "odb-actions" }, [retry])),
+      row(null, null, el("div", { class: "odb-actions" }, [pairRemote, pairLocal])),
+      pairBox,
     ]),
     section(t("servers"), [row(t("servers"), t("serversHint"), serversBox)]),
-    section(t("pairing"), [row(t("pairing"), t("pairingHint"), pairBox)]),
-    section(t("tuiWeb"), [row(t("tuiWeb"), t("tuiWebHint"), tuiWebBox)]),
     section(t("devices"), [row(t("devices"), null, devicesBox)]),
-    section(t("diagnostics"), [row(t("diagnostics"), null, diagBox)]),
+    section(t("advanced"), [row(t("advanced"), t("advancedHint"), advancedToggle), advancedBody]),
     errorBox,
   ])
 

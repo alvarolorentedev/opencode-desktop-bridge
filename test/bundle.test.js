@@ -58,3 +58,14 @@ test("the package exposes the TUI part", () => {
   assert.equal(pkg.files.includes("src/tui.ts"), true)
   assert.equal(existsSync(path.join(__dirname, "..", "src", "tui.ts")), true)
 })
+
+test("the package exposes the server tunnel part", () => {
+  const pkg = require("../package.json")
+  assert.equal(pkg.exports["./server"], "./src/server.mjs")
+  for (const file of ["src/server.mjs", "src/server-rpc.mjs", "src/core/remote.mjs"]) {
+    assert.equal(pkg.files.includes(file), true)
+    assert.equal(existsSync(path.join(__dirname, "..", file)), true)
+  }
+  assert.equal(pkg.dependencies["@opentunnel/client"], "0.7.0")
+  assert.equal(typeof pkg.dependencies["qrcode-generator"], "string")
+})

@@ -51,7 +51,7 @@ test("the plugin main entry starts, pairs through the native sidecar, and stops"
   await close(probe)
 
   const configStore = {
-    value: { enabled: true, host: "127.0.0.1", port: probePort, publicUrl: "", hiddenServers: [], configServer: "sidecar" },
+    value: { enabled: true, host: "127.0.0.1", port: probePort, publicUrl: "", hiddenServers: [], configServer: "sidecar", remoteEnabled: false, remoteRoute: "" },
     set(value) {
       this.value = value
     },
@@ -99,6 +99,10 @@ test("the plugin main entry starts, pairs through the native sidecar, and stops"
   const admin = { authorization: "Bearer adm_test" }
   const denied = await request(probePort, "/bridge/v1/admin/status")
   assert.equal(denied.status, 401)
+  const remoteAdmin = await request(probePort, "/bridge/v1/admin/status", {
+    headers: { ...admin, host: "bridge-test.tunnel.test" },
+  })
+  assert.equal(remoteAdmin.status, 403)
   const preflight = await request(probePort, "/bridge/v1/admin/status", {
     method: "OPTIONS",
     headers: { origin: "http://localhost:49374", "access-control-request-method": "GET" },
@@ -157,6 +161,23 @@ test("the plugin main entry starts, pairs through the native sidecar, and stops"
   assert.equal(removed.body.data.length, 0)
   const projectsAfter = await request(probePort, "/api/project", { headers: { authorization: basic(redeemed.body.token) } })
   assert.deepEqual(projectsAfter.body.map((project) => project.id), ["pa"])
+
+  const remotePair = await provided.pair("remote")
+  assert.match(remotePair.link, /^https:\/\/bridge-test\.tunnel\.test\/auth\/connect\/code-a$/)
+  assert.equal(remotePair.command, "opencode pair --url https://bridge-test.tunnel.test")
+  assert.equal(remotePair.remote, true)
+  assert.match(remotePair.qr, /^<svg/)
+  const remoteSnapshot = await provided.snapshot()
+  assert.equal(remoteSnapshot.remote.state, "on")
+  assert.equal(remoteSnapshot.config.remoteEnabled, true)
+  assert.equal(remoteSnapshot.config.remoteRoute, "bridge-test")
+
+  const infoRemote = await request(probePort, "/api/info", { headers: { authorization: basic(tui.token) } })
+  assert.deepEqual(infoRemote.body.urls, ["https://bridge-test.tunnel.test"])
+
+  const dismissed = await provided.setRemote(false)
+  assert.equal(dismissed.remote.state, "off")
+  assert.equal(dismissed.config.remoteEnabled, false)
 
   const devices = await provided.snapshot()
   assert.equal(devices.devices.length, 2)

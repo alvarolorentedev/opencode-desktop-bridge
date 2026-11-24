@@ -12,6 +12,9 @@ module.exports = `
 .odb-button { font: inherit; color: inherit; background: color-mix(in srgb, currentColor 8%, transparent); border: 1px solid color-mix(in srgb, currentColor 22%, transparent); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
 .odb-button:hover { background: color-mix(in srgb, currentColor 14%, transparent); }
 .odb-button:disabled { opacity: .5; cursor: default; }
+.odb-primary { font-weight: 600; }
+.odb-qr { align-self: center; width: 200px; height: 200px; padding: 8px; border-radius: 8px; background: #fff; }
+.odb-qr svg { display: block; width: 100%; height: 100%; }
 .odb-list { display: flex; flex-direction: column; gap: 7px; }
 .odb-item { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .odb-item-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

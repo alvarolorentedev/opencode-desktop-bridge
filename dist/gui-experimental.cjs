@@ -14,6 +14,8 @@ const __modules = {
       publicUrl: Schema.String,
       hiddenServers: Schema.Array(Schema.String),
       configServer: Schema.String,
+      remoteEnabled: Schema.optional(Schema.Boolean),
+      remoteRoute: Schema.optional(Schema.String),
     })
     
     const Server = Schema.Struct({
@@ -41,9 +43,16 @@ const __modules = {
       port: Schema.Number,
     })
     
+    const Remote = Schema.Struct({
+      state: Schema.String,
+      url: Schema.String,
+      error: Schema.String,
+    })
+    
     const Snapshot = Schema.Struct({
       config: Config,
       status: Status,
+      remote: Remote,
       servers: Schema.Array(Server),
       devices: Schema.Array(Device),
       sidecarReady: Schema.Boolean,
@@ -71,7 +80,16 @@ const __modules = {
     const Pairing = Schema.Struct({
       link: Schema.String,
       command: Schema.String,
+      code: Schema.String,
+      urls: Schema.Array(Schema.String),
+      qr: Schema.String,
+      base: Schema.String,
+      remote: Schema.Boolean,
       expiresAt: Schema.Number,
+    })
+    
+    const PairInput = Schema.Struct({
+      mode: Schema.Union(Schema.Literal("remote"), Schema.Literal("local")),
     })
     
     const Token = Schema.Struct({
@@ -86,16 +104,17 @@ const __modules = {
         snapshot: { output: Snapshot },
         reportServers: { input: ServerReport },
         setEnabled: { input: Schema.Boolean, output: Snapshot },
+        setRemote: { input: Schema.Boolean, output: Snapshot },
         setNetwork: { input: Network, output: Snapshot },
         setHidden: { input: Schema.Array(Schema.String), output: Snapshot },
         setConfigServer: { input: Schema.String, output: Snapshot },
         revokeDevice: { input: Schema.String, output: Snapshot },
         createDevice: { input: Schema.String, output: Token },
-        pair: { output: Pairing },
+        pair: { input: PairInput, output: Pairing },
       },
     })
     
-    module.exports = { BridgeIpc, Config, Device, Snapshot, ServerReport, Network, Pairing, Status, Token }
+    module.exports = { BridgeIpc, Config, Device, Snapshot, ServerReport, Network, Pairing, PairInput, Status, Token, Remote }
     
   },
   "gui/dom.js": function (module, exports, require) {
@@ -146,7 +165,31 @@ const __modules = {
       stopped: "Stopped",
       starting: "Starting",
       failed: "Failed",
-      enabled: "Enabled",
+      enabled: "On",
+      shareServers: "Share servers",
+      shareServersHint: "Use every server in Desktop from OpenCode Mobile through the same encrypted tunnel as Pairing.",
+      remote: "Internet access",
+      remoteOn: "Internet access on",
+      remoteOff: "Internet access off",
+      remoteStarting: "Setting up internet access…",
+      remoteFailed: "Internet access failed:",
+      retry: "Retry",
+      disableRemote: "Turn off internet access",
+      disableRemoteHint: "Closes the tunnel route. Pairing on this network keeps working.",
+      pairRemote: "Pair over the internet",
+      pairLocal: "Pair on this network",
+      pairRemoteHint: "Scan with OpenCode Mobile. Works anywhere through the existing encrypted tunnel.",
+      pairLocalHint: "Scan with OpenCode Mobile on the same network.",
+      pairingEmpty: "Choose how this phone reaches the bridge.",
+      localOnly: "This address only works on this computer. Use Pair over the internet, or set a bind address in Advanced.",
+      newCode: "New code",
+      copyLink: "Copy link",
+      copyCommand: "Copy command",
+      advanced: "Advanced",
+      hideAdvanced: "Hide advanced",
+      advancedHint: "Network, configuration server, TUI & web, diagnostics.",
+      configServer: "Configuration server",
+      configServerHint: "Supplies models, agents and global configuration.",
       network: "Network",
       host: "Bind address",
       hostHint: "127.0.0.1 is this computer only. 0.0.0.0 exposes the bridge on your local network.",
@@ -218,6 +261,9 @@ const __modules = {
     .odb-button { font: inherit; color: inherit; background: color-mix(in srgb, currentColor 8%, transparent); border: 1px solid color-mix(in srgb, currentColor 22%, transparent); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
     .odb-button:hover { background: color-mix(in srgb, currentColor 14%, transparent); }
     .odb-button:disabled { opacity: .5; cursor: default; }
+    .odb-primary { font-weight: 600; }
+    .odb-qr { align-self: center; width: 200px; height: 200px; padding: 8px; border-radius: 8px; background: #fff; }
+    .odb-qr svg { display: block; width: 100%; height: 100%; }
     .odb-list { display: flex; flex-direction: column; gap: 7px; }
     .odb-item { display: flex; align-items: center; gap: 8px; min-width: 0; }
     .odb-item-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -348,30 +394,35 @@ const __modules = {
       }
     
       const statusText = el("div", { class: "odb-muted" }, t("mainStarting"))
+      const remoteText = el("div", { class: "odb-muted odb-code" }, t("remoteOff"))
       const enable = el("input", { type: "checkbox" })
-      const host = el("input", { class: "odb-input", value: "127.0.0.1", spellcheck: "false" })
-      const port = el("input", { class: "odb-input", value: "47821", inputmode: "numeric" })
-      const publicUrl = el("input", { class: "odb-input", placeholder: "https://…", spellcheck: "false" })
-      const save = el("button", { class: "odb-button" }, t("save"))
-      const warning = el("div", { class: "odb-warning" })
-      warning.style.display = "none"
+      const pairRemote = el("button", { class: "odb-button odb-primary" }, t("pairRemote"))
+      const pairLocal = el("button", { class: "odb-button" }, t("pairLocal"))
+      const retry = el("button", { class: "odb-button" }, t("retry"))
+      retry.style.display = "none"
       const errorBox = el("div", { class: "odb-error" })
       const serversBox = el("div", { class: "odb-list" })
       const devicesBox = el("div", { class: "odb-list" })
       const pairBox = el("div", { class: "odb-card" })
-      const diagBox = el("div", { class: "odb-list" })
+      const configServerBox = el("div", { class: "odb-list" })
       const tuiWebBox = el("div", { class: "odb-list" })
+      const diagBox = el("div", { class: "odb-list" })
+      const host = el("input", { class: "odb-input", value: "127.0.0.1", spellcheck: "false" })
+      const port = el("input", { class: "odb-input", value: "47821", inputmode: "numeric" })
+      const publicUrl = el("input", { class: "odb-input", placeholder: "https://…", spellcheck: "false" })
+      const save = el("button", { class: "odb-button" }, t("save"))
+      const disableRemote = el("button", { class: "odb-button" }, t("disableRemote"))
+      const advancedToggle = el("button", { class: "odb-button" }, t("advanced"))
+      const advancedBody = el("div", { class: "odb" })
+      advancedBody.style.display = "none"
     
       let snapshot
       let pairing
       let tuiToken
+      let showAdvanced = false
     
       function showError(error) {
         errorBox.textContent = error instanceof Error ? error.message : String(error || "")
-      }
-    
-      function commandFor(base) {
-        return `opencode pair --url ${base}`
       }
     
       function copy(value, button) {
@@ -383,6 +434,15 @@ const __modules = {
         })
       }
     
+      function isLoopbackBase(value) {
+        try {
+          const hostname = new URL(value).hostname
+          return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1" || hostname === "[::1]"
+        } catch {
+          return true
+        }
+      }
+    
       function renderServers(snap) {
         clear(serversBox)
         if (!snap.servers.length) {
@@ -392,7 +452,7 @@ const __modules = {
         for (const server of snap.servers) {
           const checkbox = el("input", { type: "checkbox", checked: server.exposed })
           checkbox.onchange = async () => {
-            const hidden = new Set(snap.config.hiddenServers)
+            const hidden = new Set(snap.config.hiddenServers || [])
             if (checkbox.checked) hidden.delete(server.id)
             else hidden.add(server.id)
             try {
@@ -407,22 +467,7 @@ const __modules = {
             el("span", { class: "odb-item-name" }, server.name),
             el("span", { class: "odb-muted" }, server.source && server.source !== "desktop" ? server.source : server.id === "sidecar" ? "desktop" : server.connected ? "" : "offline"),
           ])
-          const actions = el("div", { class: "odb-actions" }, [])
-          if (server.configServer) {
-            actions.append(el("span", { class: "odb-tag" }, t("configServer")))
-          } else if (server.exposed) {
-            const use = el("button", { class: "odb-button" }, t("useForConfig"))
-            use.onclick = async () => {
-              try {
-                snapshot = await ipc.setConfigServer(server.id)
-                apply(snapshot)
-              } catch (error) {
-                showError(error)
-              }
-            }
-            actions.append(use)
-          }
-          serversBox.append(el("div", { class: "odb-row" }, [label, actions]))
+          serversBox.append(label)
         }
       }
     
@@ -454,39 +499,62 @@ const __modules = {
         }
       }
     
-      function renderPairing(snap) {
-        clear(pairBox)
-        const base = snap.status.baseUrl || snap.status.addresses[0] || ""
-        const hint = el("div", { class: "odb-muted" }, t("pairingHint"))
-        if (pairing) {
-          const link = el("div", { class: "odb-code" }, pairing.link)
-          const command = el("div", { class: "odb-code" }, pairing.command)
-          const copyLink = el("button", { class: "odb-button" }, t("copy"))
-          copyLink.onclick = () => copy(pairing.link, copyLink)
-          const copyCommand = el("button", { class: "odb-button" }, t("copy"))
-          copyCommand.onclick = () => copy(pairing.command, copyCommand)
-          const expires = el("div", { class: "odb-muted" }, `Expires ${new Date(pairing.expiresAt).toLocaleTimeString()}`)
-          pairBox.append(link, el("div", { class: "odb-actions" }, [copyLink]), command, el("div", { class: "odb-actions" }, [copyCommand]), expires, hint)
+      function renderConfigServer(snap) {
+        clear(configServerBox)
+        const options = snap.servers.filter((server) => server.exposed || server.configServer)
+        if (!options.length) {
+          configServerBox.append(el("div", { class: "odb-muted" }, t("notReady")))
           return
         }
-        const pair = el("button", { class: "odb-button" }, t("pair"))
-        pair.onclick = async () => {
+        const select = el("select", { class: "odb-input" })
+        for (const server of options) {
+          const option = el("option", { value: server.id }, server.name)
+          if (server.configServer) option.selected = true
+          select.append(option)
+        }
+        select.onchange = async () => {
           try {
-            pairing = await ipc.pair()
-            renderPairing(snapshot)
+            snapshot = await ipc.setConfigServer(select.value)
+            apply(snapshot)
           } catch (error) {
             showError(error)
           }
         }
-        const manual = el("div", { class: "odb-code" }, commandFor(base))
-        const copyCommand = el("button", { class: "odb-button" }, t("copy"))
-        copyCommand.onclick = () => copy(commandFor(base), copyCommand)
-        pairBox.append(pair, el("div", { class: "odb-actions" }, [copyCommand]), manual, hint)
+        configServerBox.append(select)
+      }
+    
+      function renderPairing(snap) {
+        clear(pairBox)
+        if (!pairing || pairing.expiresAt < Date.now()) {
+          pairBox.append(el("div", { class: "odb-muted" }, t("pairingEmpty")))
+          return
+        }
+        if (pairing.qr) {
+          const qr = el("div", { class: "odb-qr" })
+          qr.innerHTML = pairing.qr
+          pairBox.append(qr)
+        }
+        pairBox.append(el("div", { class: "odb-code" }, pairing.link))
+        pairBox.append(el("div", { class: "odb-code" }, pairing.command))
+        const actions = el("div", { class: "odb-actions" }, [])
+        const copyLink = el("button", { class: "odb-button" }, t("copyLink"))
+        copyLink.onclick = () => copy(pairing.link, copyLink)
+        const copyCommand = el("button", { class: "odb-button" }, t("copyCommand"))
+        copyCommand.onclick = () => copy(pairing.command, copyCommand)
+        const again = el("button", { class: "odb-button" }, t("newCode"))
+        again.onclick = () => startPairing(pairing.remote ? "remote" : "local")
+        actions.append(copyLink, copyCommand, again)
+        pairBox.append(actions)
+        pairBox.append(el("div", { class: "odb-muted" }, `Expires ${new Date(pairing.expiresAt).toLocaleTimeString()}`))
+        pairBox.append(el("div", { class: "odb-muted" }, pairing.remote ? t("pairRemoteHint") : t("pairLocalHint")))
+        if (!pairing.remote && isLoopbackBase(pairing.base)) {
+          pairBox.append(el("div", { class: "odb-warning" }, t("localOnly")))
+        }
       }
     
       function renderTuiWeb(snap) {
         clear(tuiWebBox)
-        const base = snap.status.baseUrl || snap.status.addresses[0] || ""
+        const base = `http://127.0.0.1:${snap.status.port}`
         const admin = el("input", { class: "odb-input", value: snap.adminToken || "", readonly: "readonly", spellcheck: "false" })
         const copyAdmin = el("button", { class: "odb-button" }, t("copy"))
         copyAdmin.onclick = () => copy(snap.adminToken || "", copyAdmin)
@@ -551,6 +619,7 @@ const __modules = {
             ]),
           )
         line(t("bridgeUrl"), snap.status.baseUrl || "—")
+        line(t("remote"), snap.remote && snap.remote.url ? snap.remote.url : t("remoteOff"))
         line(t("addresses"), snap.status.addresses.join("  ·  ") || "—")
         line(t("version"), `bridge ${snap.bridgeVersion} · desktop ${snap.appVersion}`)
         line(t("desktopServer"), snap.sidecarReady ? t("ready") : t("notReady"))
@@ -561,25 +630,29 @@ const __modules = {
         const state = snap.status.state
         statusText.textContent =
           state === "running"
-            ? `${t("running")} · ${snap.status.baseUrl}`
+            ? t("running")
             : state === "starting"
               ? t("starting")
               : state === "error"
                 ? `${t("failed")} · ${snap.status.error}`
                 : t("stopped")
-        enable.checked = snap.config.enabled
+        const remote = snap.remote || { state: "off", url: "", error: "" }
+        remoteText.textContent =
+          remote.state === "on"
+            ? `${t("remoteOn")} · ${remote.url}`
+            : remote.state === "starting"
+              ? t("remoteStarting")
+              : remote.state === "error"
+                ? `${t("remoteFailed")} ${remote.error}`
+                : t("remoteOff")
+        retry.style.display = remote.state === "error" ? "" : "none"
+        disableRemote.style.display = snap.config.remoteEnabled ? "" : "none"
+        enable.checked = Boolean(snap.config.enabled)
         if (document.activeElement !== host) host.value = snap.config.host
         if (document.activeElement !== port) port.value = String(snap.config.port)
-        if (document.activeElement !== publicUrl) publicUrl.value = snap.config.publicUrl
-        warning.textContent = t("loopbackWarning")
-        let baseHost = ""
-        try {
-          baseHost = new URL(snap.status.baseUrl || "http://127.0.0.1").hostname
-        } catch {
-          baseHost = ""
-        }
-        warning.style.display = !snap.config.publicUrl && isLoopback(baseHost) ? "block" : "none"
+        if (document.activeElement !== publicUrl) publicUrl.value = snap.config.publicUrl || ""
         renderServers(snap)
+        renderConfigServer(snap)
         renderDevices(snap)
         if (pairing && pairing.expiresAt < Date.now()) pairing = undefined
         renderPairing(snap)
@@ -602,10 +675,49 @@ const __modules = {
       }
       let refreshing = false
     
+      async function startPairing(mode) {
+        errorBox.textContent = ""
+        pairRemote.disabled = true
+        pairLocal.disabled = true
+        try {
+          if (!snapshot || !snapshot.config.enabled) {
+            snapshot = await ipc.setEnabled(true)
+            apply(snapshot)
+          }
+          pairing = await ipc.pair({ mode })
+          renderPairing(snapshot)
+          apply(await ipc.snapshot())
+        } catch (error) {
+          showError(error)
+        } finally {
+          pairRemote.disabled = false
+          pairLocal.disabled = false
+        }
+      }
+    
       enable.onchange = async () => {
         try {
           pairing = undefined
           apply(await ipc.setEnabled(enable.checked))
+        } catch (error) {
+          showError(error)
+        }
+      }
+    
+      pairRemote.onclick = () => startPairing("remote")
+      pairLocal.onclick = () => startPairing("local")
+    
+      retry.onclick = async () => {
+        try {
+          apply(await ipc.setRemote(true))
+        } catch (error) {
+          showError(error)
+        }
+      }
+    
+      disableRemote.onclick = async () => {
+        try {
+          apply(await ipc.setRemote(false))
         } catch (error) {
           showError(error)
         }
@@ -626,22 +738,36 @@ const __modules = {
         }
       }
     
+      advancedToggle.onclick = () => {
+        showAdvanced = !showAdvanced
+        advancedBody.style.display = showAdvanced ? "" : "none"
+        advancedToggle.textContent = showAdvanced ? t("hideAdvanced") : t("advanced")
+      }
+    
+      advancedBody.append(
+        row(t("host"), t("hostHint"), host),
+        row(t("port"), t("portHint"), port),
+        row(t("publicUrl"), t("publicUrlHint"), publicUrl),
+        row(null, null, el("div", { class: "odb-actions" }, [save])),
+        row(t("configServer"), t("configServerHint"), configServerBox),
+        row(t("remote"), t("disableRemoteHint"), disableRemote),
+        row(t("tuiWeb"), t("tuiWebHint"), null),
+        tuiWebBox,
+        row(t("diagnostics"), null, null),
+        diagBox,
+      )
+    
       const root = el("div", { class: "odb" }, [
-        warning,
-        section(t("status"), [
-          row(t("status"), statusText, el("label", { class: "odb-item" }, [enable, el("span", {}, t("enabled"))])),
-        ]),
-        section(t("network"), [
-          row(t("host"), t("hostHint"), host),
-          row(t("port"), t("portHint"), port),
-          row(t("publicUrl"), t("publicUrlHint"), publicUrl),
-          row(null, null, el("div", { class: "odb-actions" }, [save])),
+        section(t("shareServers"), [
+          row(null, t("shareServersHint"), el("label", { class: "odb-item" }, [enable, el("span", {}, t("enabled"))])),
+          row(t("status"), statusText, null),
+          row(t("remote"), remoteText, el("div", { class: "odb-actions" }, [retry])),
+          row(null, null, el("div", { class: "odb-actions" }, [pairRemote, pairLocal])),
+          pairBox,
         ]),
         section(t("servers"), [row(t("servers"), t("serversHint"), serversBox)]),
-        section(t("pairing"), [row(t("pairing"), t("pairingHint"), pairBox)]),
-        section(t("tuiWeb"), [row(t("tuiWeb"), t("tuiWebHint"), tuiWebBox)]),
         section(t("devices"), [row(t("devices"), null, devicesBox)]),
-        section(t("diagnostics"), [row(t("diagnostics"), null, diagBox)]),
+        section(t("advanced"), [row(t("advanced"), t("advancedHint"), advancedToggle), advancedBody]),
         errorBox,
       ])
     
@@ -1599,6 +1725,20 @@ const __modules = {
         return value || `http://127.0.0.1:${state.port}`
       }
     
+      // The admin API changes the catalog and holds the admin token. It stays on
+      // this computer even when the data plane is reachable through a tunnel.
+      function adminAllowed(req) {
+        const host = req.headers.host
+        if (typeof host !== "string" || !host) return false
+        let hostname
+        try {
+          hostname = new URL(`http://${host}`).hostname
+        } catch {
+          return false
+        }
+        return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1" || hostname === "[::1]"
+      }
+    
       function addDirectory(directory, serverId) {
         if (typeof directory !== "string" || !directory) return
         const owners = state.directories.get(directory) || new Set()
@@ -2073,6 +2213,10 @@ const __modules = {
           return
         }
         if (control && control.match(pathname)) {
+          if (!adminAllowed(req)) {
+            sendJson(res, 403, { message: "The bridge admin API is available on this computer only." })
+            return
+          }
           await control.handle(req, res, pathname, url.searchParams)
           return
         }
@@ -3063,7 +3207,11 @@ const __modules = {
       publicUrl: "",
       hiddenServers: [],
       configServer: "sidecar",
+      remoteEnabled: false,
+      remoteRoute: "",
     }
+    
+    const ROUTE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
     
     function loopback(host) {
       return host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]"
@@ -3093,6 +3241,10 @@ const __modules = {
       const hiddenServers = Array.isArray(config.hiddenServers)
         ? [...new Set(config.hiddenServers.filter((id) => typeof id === "string" && id))]
         : []
+      const remoteRoute =
+        typeof config.remoteRoute === "string" && config.remoteRoute.length <= 63 && ROUTE.test(config.remoteRoute)
+          ? config.remoteRoute
+          : ""
       return {
         value: {
           enabled: Boolean(config.enabled),
@@ -3101,6 +3253,8 @@ const __modules = {
           publicUrl: publicUrl.value,
           hiddenServers,
           configServer: typeof config.configServer === "string" && config.configServer ? config.configServer : "sidecar",
+          remoteEnabled: Boolean(config.remoteEnabled),
+          remoteRoute,
         },
         basePath: publicUrl.basePath,
         error: publicUrl.error,
@@ -3195,9 +3349,12 @@ const __modules = {
       addressHint,
     } = require("@b/core/index.js")
     const { DEFAULT_CONFIG } = require("@b/core/config.js")
+    const { requestJson } = require("@b/core/http.js")
     const { basicAuth, errorMessage, randomId } = require("@b/core/util.js")
     
-    const VERSION = "0.1.0"
+    const VERSION = "0.2.0"
+    const RPC_ID = "desktop-bridge.remote"
+    const REMOTE_TIMEOUT = 180000
     
     const DeviceRecord = Schema.Struct({
       id: Schema.String,
@@ -3254,6 +3411,112 @@ const __modules = {
       let bridge
       let status = { state: "off", error: "", baseUrl: "", addresses: [], port: getConfig().port }
       let applying = Promise.resolve()
+      let remote = { state: "off", url: "", error: "" }
+      let remoteQueue = Promise.resolve()
+    
+      function queueRemote(run) {
+        const next = remoteQueue.then(run, run)
+        remoteQueue = next.catch(() => {})
+        return next
+      }
+    
+      async function remoteRpc(method, input = {}, timeoutMs = REMOTE_TIMEOUT) {
+        const endpoint = endpoints && endpoints.get("sidecar")
+        if (!endpoint) throw new Error("OpenCode Desktop's server is not ready yet.")
+        const response = await requestJson(endpoint, `/api/rpc/${RPC_ID}/${method}`, "", {
+          method: "POST",
+          body: JSON.stringify({ input }),
+          timeoutMs,
+        })
+        if (response.status < 200 || response.status >= 300) {
+          const message =
+            response.body && typeof response.body.message === "string"
+              ? response.body.message
+              : `Remote access request failed (${response.status}).`
+          throw new Error(response.status === 404 ? "Remote access is not available. Restart OpenCode Desktop so the plugin server part loads." : message)
+        }
+        return (response.body && response.body.output) || {}
+      }
+    
+      function remoteHost(config) {
+        const host = String(config.host || "127.0.0.1")
+        if (host === "0.0.0.0" || host === "::" || host === "[::]" || host === "::1" || host === "[::1]") return "127.0.0.1"
+        if (host.includes(":") && !host.startsWith("[")) return `[${host}]`
+        return host
+      }
+    
+      let disposed = false
+    
+      // The sidecar can start after the plugin. Keep trying while the remote is
+      // wanted, instead of leaving an already-paired phone offline until a refresh.
+      function scheduleRemoteRetry() {
+        if (disposed) return
+        const timer = setTimeout(() => {
+          const config = getConfig()
+          if (!disposed && config.enabled && config.remoteEnabled && remote.state === "starting") void syncRemote()
+        }, 3000)
+        timer.unref?.()
+      }
+    
+      function syncRemote() {
+        return queueRemote(async () => {
+          const config = getConfig()
+          if (!config.enabled || !config.remoteEnabled) {
+            if (remote.state !== "off") {
+              remote = { state: "off", url: "", error: "" }
+              try {
+                await remoteRpc("detach", {}, 5000)
+              } catch {
+                // The server part may not be loaded yet; the route is local to it anyway.
+              }
+            }
+            return remote
+          }
+          if (!bridge || !bridge.running) return remote
+          remote = { state: "starting", url: "", error: "" }
+          if (!endpoints || !endpoints.get("sidecar")) {
+            scheduleRemoteRetry()
+            return remote
+          }
+          try {
+            const output = await remoteRpc("attach", {
+              host: remoteHost(config),
+              port: bridge.port,
+              route: config.remoteRoute || "",
+            })
+            if (output.route && output.route !== getConfig().remoteRoute) {
+              setConfig({ ...getConfig(), remoteRoute: output.route })
+            }
+            remote = { state: "on", url: String(output.url || ""), error: "" }
+          } catch (error) {
+            remote = { state: "error", url: "", error: errorMessage(error) }
+            writeLog("warn", "remote access failed", { error: remote.error })
+          }
+          return remote
+        })
+      }
+    
+      function detachRemote() {
+        return queueRemote(async () => {
+          remote = { state: "off", url: "", error: "" }
+          try {
+            await remoteRpc("detach", {}, 5000)
+          } catch {
+            // Nothing to close when the server part is gone.
+          }
+          return remote
+        })
+      }
+    
+      async function makeQr(text) {
+        try {
+          const output = await remoteRpc("qr", { text }, 10000)
+          return typeof output.svg === "string" ? output.svg : ""
+        } catch (error) {
+          writeLog("warn", "pairing QR unavailable", { error: errorMessage(error) })
+          return ""
+        }
+      }
     
       const registry = createServerRegistry({
         getConfig,
@@ -3311,16 +3574,51 @@ const __modules = {
         sourcesStore.set({ ...sourcesStore.value, [id]: list })
       }
     
-      function baseFor(config) {
-        return normalizeConfig(config).value.publicUrl || addressHint(normalizeConfig(config).value)
+      function localBase(config) {
+        const value = normalizeConfig(config).value
+        return value.publicUrl || addressHint(value)
       }
     
-      async function pairLink() {
+      function baseFor(config) {
+        const value = normalizeConfig(config).value
+        return value.publicUrl || (remote.state === "on" && remote.url ? remote.url : addressHint(value))
+      }
+    
+      async function pairing(mode = "local") {
+        let config = getConfig()
+        if (!config.enabled) {
+          setConfig({ ...config, enabled: true })
+          await schedule()
+          config = getConfig()
+        }
+        if (!bridge || !bridge.running) throw new Error("The bridge is not running. Check the port in Advanced.")
+    
+        let base
+        if (mode === "remote") {
+          setConfig({ ...config, remoteEnabled: true })
+          await syncRemote()
+          if (remote.state !== "on" || !remote.url) {
+            throw new Error(remote.error || "Internet access is not ready yet. Try again.")
+          }
+          base = remote.url
+        } else {
+          base = localBase(config)
+        }
+    
         const endpoint = endpoints && endpoints.get("sidecar")
         if (!endpoint) throw new Error("The Desktop server is not ready yet.")
         const result = await issuePairing(endpoint)
+        const clean = String(base || "").replace(/\/+$/, "")
+        if (!clean) throw new Error("The bridge has no reachable address.")
+        const qr = await makeQr(JSON.stringify({ code: result.code, urls: [clean] }))
         return {
-          link: `${baseFor(getConfig())}/auth/connect/${encodeURIComponent(result.code)}`,
+          link: `${clean}/auth/connect/${encodeURIComponent(result.code)}`,
+          command: `opencode pair --url ${clean}`,
+          code: result.code,
+          urls: [clean],
+          qr,
+          base: clean,
+          remote: mode === "remote",
           expiresAt: Date.now() + (result.expiresIn || 300) * 1000,
         }
       }
@@ -3332,7 +3630,7 @@ const __modules = {
         snapshot: () => catalog.snapshot(),
         baseUrl: () => baseFor(getConfig()),
         version: VERSION,
-        pair: pairLink,
+        pair: () => pairing(remote.state === "on" ? "remote" : "local"),
         log: writeLog,
         onChange: () => {
           bridge?.notifyChanged()
@@ -3353,9 +3651,13 @@ const __modules = {
           addresses: reachableAddresses(config),
           port: config.port,
         }
-        if (!config.enabled) return
+        if (!config.enabled) {
+          if (remote.state !== "off") void detachRemote()
+          return
+        }
         if (normalized.error) {
           status.state = "error"
+          if (remote.state !== "off") void detachRemote()
           return
         }
     
@@ -3394,6 +3696,8 @@ const __modules = {
             addresses: reachableAddresses(config),
             port: address.port,
           }
+          if (config.remoteEnabled) void syncRemote()
+          else if (remote.state !== "off") void detachRemote()
         } catch (error) {
           bridge = undefined
           status = {
@@ -3403,6 +3707,7 @@ const __modules = {
             addresses: reachableAddresses(config),
             port: config.port,
           }
+          if (remote.state !== "off") void detachRemote()
           writeLog("error", "could not listen", { error: errorMessage(error), host: config.host, port: config.port })
         }
       }
@@ -3412,7 +3717,33 @@ const __modules = {
         return applying
       }
     
+      const remoteTimer = setInterval(() => {
+        const config = getConfig()
+        if (disposed || !config.enabled || !config.remoteEnabled || remote.state !== "on") return
+        void remoteRpc("status", {}, 5000).then(
+          (output) => {
+            if (disposed) return
+            if (!output || output.state !== "on") void syncRemote()
+          },
+          () => {
+            // The sidecar restarted and the server part lost its route.
+            if (!disposed) void syncRemote()
+          },
+        )
+      }, 10000)
+      remoteTimer.unref?.()
+    
       ctx.onCleanup(async () => {
+        disposed = true
+        clearInterval(remoteTimer)
+        if (remote.state !== "off") {
+          try {
+            await remoteRpc("detach", {}, 1500)
+          } catch {
+            // The server part closes its own route when it unloads.
+          }
+          remote = { state: "off", url: "", error: "" }
+        }
         const current = bridge
         bridge = undefined
         if (current) await current.stop()
@@ -3431,12 +3762,13 @@ const __modules = {
           status: {
             state: status.state,
             error: status.error,
-            baseUrl: status.baseUrl || baseFor(config),
+            baseUrl: baseFor(config),
             addresses: reachableAddresses(config),
             port: bridge ? bridge.port : status.port,
           },
           servers: catalog.snapshot(),
           devices: devices.list(),
+          remote: { ...remote },
           sidecarReady: Boolean(endpoints && endpoints.get("sidecar")),
           adminToken: adminStore.value.token,
           bridgeVersion: VERSION,
@@ -3444,13 +3776,8 @@ const __modules = {
         }
       }
     
-      async function pair() {
-        if (status.state !== "running") throw new Error("Start the bridge before pairing a device.")
-        const result = await pairLink()
-        return {
-          ...result,
-          command: `opencode pair --url ${baseFor(getConfig())}`,
-        }
+      function pair(mode = "local") {
+        return pairing(mode === "remote" ? "remote" : "local")
       }
     
       ctx.provide(BridgeIpc, {
@@ -3461,6 +3788,12 @@ const __modules = {
         setEnabled: async (enabled) => {
           setConfig({ ...getConfig(), enabled })
           await schedule()
+          return snapshot()
+        },
+        setRemote: async (enabled) => {
+          setConfig({ ...getConfig(), remoteEnabled: Boolean(enabled) })
+          if (enabled) await syncRemote()
+          else await detachRemote()
           return snapshot()
         },
         setNetwork: async (input) => {
@@ -3489,7 +3822,10 @@ const __modules = {
           const result = devices.create(String(name || "TUI"))
           return { token: result.token, id: result.device.id }
         },
-        pair: async () => pair(),
+        pair: async (input) => {
+          const mode = typeof input === "string" ? input : input && input.mode
+          return pair(mode === "remote" ? "remote" : "local")
+        },
       })
     }
     

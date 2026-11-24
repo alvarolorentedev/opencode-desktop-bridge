@@ -101,8 +101,9 @@ test("the settings page renders against the desktop UI contract", async () => {
     const definition = module.exports.default || module.exports
 
     const snapshot = {
-      config: { enabled: true, host: "0.0.0.0", port: 47821, publicUrl: "", hiddenServers: [], configServer: "sidecar" },
-      status: { state: "running", error: "", baseUrl: "http://192.168.1.20:47821", addresses: ["http://192.168.1.20:47821"], port: 47821 },
+      config: { enabled: true, host: "0.0.0.0", port: 47821, publicUrl: "", hiddenServers: [], configServer: "sidecar", remoteEnabled: true, remoteRoute: "bridge-test" },
+      status: { state: "running", error: "", baseUrl: "https://bridge-test.tunnel.test", addresses: ["https://bridge-test.tunnel.test", "http://192.168.1.20:47821"], port: 47821 },
+      remote: { state: "on", url: "https://bridge-test.tunnel.test", error: "" },
       servers: [
         { id: "sidecar", name: "Desktop", connected: true, exposed: true, configServer: true, source: "desktop" },
         { id: "a", name: "Remote", connected: false, exposed: true, configServer: false, source: "desktop" },
@@ -117,12 +118,22 @@ test("the settings page renders against the desktop UI contract", async () => {
       snapshot: async () => snapshot,
       reportServers: async () => {},
       setEnabled: async () => snapshot,
+      setRemote: async () => snapshot,
       setNetwork: async () => snapshot,
       setHidden: async () => snapshot,
       setConfigServer: async () => snapshot,
       revokeDevice: async () => snapshot,
       createDevice: async () => ({ token: "brg1_test", id: "dev_2" }),
-      pair: async () => ({ link: "http://192.168.1.20:47821/auth/connect/x", command: "opencode pair --url http://192.168.1.20:47821", expiresAt: Date.now() + 1000 }),
+      pair: async () => ({
+        link: "https://bridge-test.tunnel.test/auth/connect/x",
+        command: "opencode pair --url https://bridge-test.tunnel.test",
+        code: "x",
+        urls: ["https://bridge-test.tunnel.test"],
+        qr: "<svg></svg>",
+        base: "https://bridge-test.tunnel.test",
+        remote: true,
+        expiresAt: Date.now() + 1000,
+      }),
     }
     const ui = (props) => {
       const node = new FakeElement()
@@ -155,6 +166,8 @@ test("the settings page renders against the desktop UI contract", async () => {
     assert.ok(rendered instanceof FakeNode)
     assert.ok(rendered.children.length > 0)
     assert.equal(typeof page.item.title, "string")
+    assert.ok(findText(rendered, "Pair over the internet"), "remote pairing button")
+    assert.ok(findText(rendered, "Pair on this network"), "local pairing button")
 
     const command = contributions.find((entry) => entry.registry === token.Command)
     assert.ok(command, "command contribution")

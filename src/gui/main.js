@@ -15,9 +15,12 @@ const {
   addressHint,
 } = require("../core/index.js")
 const { DEFAULT_CONFIG } = require("../core/config.js")
+const { requestJson } = require("../core/http.js")
 const { basicAuth, errorMessage, randomId } = require("../core/util.js")
 
-const VERSION = "0.1.0"
+const VERSION = "0.2.0"
+const RPC_ID = "desktop-bridge.remote"
+const REMOTE_TIMEOUT = 180000
 
 const DeviceRecord = Schema.Struct({
   id: Schema.String,
@@ -74,6 +77,112 @@ function setup(ctx) {
   let bridge
   let status = { state: "off", error: "", baseUrl: "", addresses: [], port: getConfig().port }
   let applying = Promise.resolve()
+  let remote = { state: "off", url: "", error: "" }
+  let remoteQueue = Promise.resolve()
+
+  function queueRemote(run) {
+    const next = remoteQueue.then(run, run)
+    remoteQueue = next.catch(() => {})
+    return next
+  }
+
+  async function remoteRpc(method, input = {}, timeoutMs = REMOTE_TIMEOUT) {
+    const endpoint = endpoints && endpoints.get("sidecar")
+    if (!endpoint) throw new Error("OpenCode Desktop's server is not ready yet.")
+    const response = await requestJson(endpoint, `/api/rpc/${RPC_ID}/${method}`, "", {
+      method: "POST",
+      body: JSON.stringify({ input }),
+      timeoutMs,
+    })
+    if (response.status < 200 || response.status >= 300) {
+      const message =
+        response.body && typeof response.body.message === "string"
+          ? response.body.message
+          : `Remote access request failed (${response.status}).`
+      throw new Error(response.status === 404 ? "Remote access is not available. Restart OpenCode Desktop so the plugin server part loads." : message)
+    }
+    return (response.body && response.body.output) || {}
+  }
+
+  function remoteHost(config) {
+    const host = String(config.host || "127.0.0.1")
+    if (host === "0.0.0.0" || host === "::" || host === "[::]" || host === "::1" || host === "[::1]") return "127.0.0.1"
+    if (host.includes(":") && !host.startsWith("[")) return `[${host}]`
+    return host
+  }
+
+  let disposed = false
+
+  // The sidecar can start after the plugin. Keep trying while the remote is
+  // wanted, instead of leaving an already-paired phone offline until a refresh.
+  function scheduleRemoteRetry() {
+    if (disposed) return
+    const timer = setTimeout(() => {
+      const config = getConfig()
+      if (!disposed && config.enabled && config.remoteEnabled && remote.state === "starting") void syncRemote()
+    }, 3000)
+    timer.unref?.()
+  }
+
+  function syncRemote() {
+    return queueRemote(async () => {
+      const config = getConfig()
+      if (!config.enabled || !config.remoteEnabled) {
+        if (remote.state !== "off") {
+          remote = { state: "off", url: "", error: "" }
+          try {
+            await remoteRpc("detach", {}, 5000)
+          } catch {
+            // The server part may not be loaded yet; the route is local to it anyway.
+          }
+        }
+        return remote
+      }
+      if (!bridge || !bridge.running) return remote
+      remote = { state: "starting", url: "", error: "" }
+      if (!endpoints || !endpoints.get("sidecar")) {
+        scheduleRemoteRetry()
+        return remote
+      }
+      try {
+        const output = await remoteRpc("attach", {
+          host: remoteHost(config),
+          port: bridge.port,
+          route: config.remoteRoute || "",
+        })
+        if (output.route && output.route !== getConfig().remoteRoute) {
+          setConfig({ ...getConfig(), remoteRoute: output.route })
+        }
+        remote = { state: "on", url: String(output.url || ""), error: "" }
+      } catch (error) {
+        remote = { state: "error", url: "", error: errorMessage(error) }
+        writeLog("warn", "remote access failed", { error: remote.error })
+      }
+      return remote
+    })
+  }
+
+  function detachRemote() {
+    return queueRemote(async () => {
+      remote = { state: "off", url: "", error: "" }
+      try {
+        await remoteRpc("detach", {}, 5000)
+      } catch {
+        // Nothing to close when the server part is gone.
+      }
+      return remote
+    })
+  }
+
+  async function makeQr(text) {
+    try {
+      const output = await remoteRpc("qr", { text }, 10000)
+      return typeof output.svg === "string" ? output.svg : ""
+    } catch (error) {
+      writeLog("warn", "pairing QR unavailable", { error: errorMessage(error) })
+      return ""
+    }
+  }
 
   const registry = createServerRegistry({
     getConfig,
@@ -131,16 +240,51 @@ function setup(ctx) {
     sourcesStore.set({ ...sourcesStore.value, [id]: list })
   }
 
-  function baseFor(config) {
-    return normalizeConfig(config).value.publicUrl || addressHint(normalizeConfig(config).value)
+  function localBase(config) {
+    const value = normalizeConfig(config).value
+    return value.publicUrl || addressHint(value)
   }
 
-  async function pairLink() {
+  function baseFor(config) {
+    const value = normalizeConfig(config).value
+    return value.publicUrl || (remote.state === "on" && remote.url ? remote.url : addressHint(value))
+  }
+
+  async function pairing(mode = "local") {
+    let config = getConfig()
+    if (!config.enabled) {
+      setConfig({ ...config, enabled: true })
+      await schedule()
+      config = getConfig()
+    }
+    if (!bridge || !bridge.running) throw new Error("The bridge is not running. Check the port in Advanced.")
+
+    let base
+    if (mode === "remote") {
+      setConfig({ ...config, remoteEnabled: true })
+      await syncRemote()
+      if (remote.state !== "on" || !remote.url) {
+        throw new Error(remote.error || "Internet access is not ready yet. Try again.")
+      }
+      base = remote.url
+    } else {
+      base = localBase(config)
+    }
+
     const endpoint = endpoints && endpoints.get("sidecar")
     if (!endpoint) throw new Error("The Desktop server is not ready yet.")
     const result = await issuePairing(endpoint)
+    const clean = String(base || "").replace(/\/+$/, "")
+    if (!clean) throw new Error("The bridge has no reachable address.")
+    const qr = await makeQr(JSON.stringify({ code: result.code, urls: [clean] }))
     return {
-      link: `${baseFor(getConfig())}/auth/connect/${encodeURIComponent(result.code)}`,
+      link: `${clean}/auth/connect/${encodeURIComponent(result.code)}`,
+      command: `opencode pair --url ${clean}`,
+      code: result.code,
+      urls: [clean],
+      qr,
+      base: clean,
+      remote: mode === "remote",
       expiresAt: Date.now() + (result.expiresIn || 300) * 1000,
     }
   }
@@ -152,7 +296,7 @@ function setup(ctx) {
     snapshot: () => catalog.snapshot(),
     baseUrl: () => baseFor(getConfig()),
     version: VERSION,
-    pair: pairLink,
+    pair: () => pairing(remote.state === "on" ? "remote" : "local"),
     log: writeLog,
     onChange: () => {
       bridge?.notifyChanged()
@@ -173,9 +317,13 @@ function setup(ctx) {
       addresses: reachableAddresses(config),
       port: config.port,
     }
-    if (!config.enabled) return
+    if (!config.enabled) {
+      if (remote.state !== "off") void detachRemote()
+      return
+    }
     if (normalized.error) {
       status.state = "error"
+      if (remote.state !== "off") void detachRemote()
       return
     }
 
@@ -214,6 +362,8 @@ function setup(ctx) {
         addresses: reachableAddresses(config),
         port: address.port,
       }
+      if (config.remoteEnabled) void syncRemote()
+      else if (remote.state !== "off") void detachRemote()
     } catch (error) {
       bridge = undefined
       status = {
@@ -223,6 +373,7 @@ function setup(ctx) {
         addresses: reachableAddresses(config),
         port: config.port,
       }
+      if (remote.state !== "off") void detachRemote()
       writeLog("error", "could not listen", { error: errorMessage(error), host: config.host, port: config.port })
     }
   }
@@ -232,7 +383,33 @@ function setup(ctx) {
     return applying
   }
 
+  const remoteTimer = setInterval(() => {
+    const config = getConfig()
+    if (disposed || !config.enabled || !config.remoteEnabled || remote.state !== "on") return
+    void remoteRpc("status", {}, 5000).then(
+      (output) => {
+        if (disposed) return
+        if (!output || output.state !== "on") void syncRemote()
+      },
+      () => {
+        // The sidecar restarted and the server part lost its route.
+        if (!disposed) void syncRemote()
+      },
+    )
+  }, 10000)
+  remoteTimer.unref?.()
+
   ctx.onCleanup(async () => {
+    disposed = true
+    clearInterval(remoteTimer)
+    if (remote.state !== "off") {
+      try {
+        await remoteRpc("detach", {}, 1500)
+      } catch {
+        // The server part closes its own route when it unloads.
+      }
+      remote = { state: "off", url: "", error: "" }
+    }
     const current = bridge
     bridge = undefined
     if (current) await current.stop()
@@ -251,12 +428,13 @@ function setup(ctx) {
       status: {
         state: status.state,
         error: status.error,
-        baseUrl: status.baseUrl || baseFor(config),
+        baseUrl: baseFor(config),
         addresses: reachableAddresses(config),
         port: bridge ? bridge.port : status.port,
       },
       servers: catalog.snapshot(),
       devices: devices.list(),
+      remote: { ...remote },
       sidecarReady: Boolean(endpoints && endpoints.get("sidecar")),
       adminToken: adminStore.value.token,
       bridgeVersion: VERSION,
@@ -264,13 +442,8 @@ function setup(ctx) {
     }
   }
 
-  async function pair() {
-    if (status.state !== "running") throw new Error("Start the bridge before pairing a device.")
-    const result = await pairLink()
-    return {
-      ...result,
-      command: `opencode pair --url ${baseFor(getConfig())}`,
-    }
+  function pair(mode = "local") {
+    return pairing(mode === "remote" ? "remote" : "local")
   }
 
   ctx.provide(BridgeIpc, {
@@ -281,6 +454,12 @@ function setup(ctx) {
     setEnabled: async (enabled) => {
       setConfig({ ...getConfig(), enabled })
       await schedule()
+      return snapshot()
+    },
+    setRemote: async (enabled) => {
+      setConfig({ ...getConfig(), remoteEnabled: Boolean(enabled) })
+      if (enabled) await syncRemote()
+      else await detachRemote()
       return snapshot()
     },
     setNetwork: async (input) => {
@@ -309,7 +488,10 @@ function setup(ctx) {
       const result = devices.create(String(name || "TUI"))
       return { token: result.token, id: result.device.id }
     },
-    pair: async () => pair(),
+    pair: async (input) => {
+      const mode = typeof input === "string" ? input : input && input.mode
+      return pair(mode === "remote" ? "remote" : "local")
+    },
   })
 }
 

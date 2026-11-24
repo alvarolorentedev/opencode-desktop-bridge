@@ -36,6 +36,31 @@ function createUpstream(name) {
     if (url.pathname === "/api/pair" && req.method === "POST") {
       return send(200, { code: `code-${name}`, expires_in: 300 })
     }
+    if (url.pathname.startsWith("/api/rpc/desktop-bridge.remote/")) {
+      let raw = ""
+      req.on("data", (chunk) => (raw += chunk))
+      req.on("end", () => {
+        let body = {}
+        try {
+          body = raw ? JSON.parse(raw) : {}
+        } catch {
+          body = {}
+        }
+        const method = url.pathname.split("/").pop()
+        if (method === "attach") {
+          return send(200, {
+            output: { url: "https://bridge-test.tunnel.test", route: (body.input && body.input.route) || "bridge-test" },
+          })
+        }
+        if (method === "detach") return send(200, { output: { ok: true } })
+        if (method === "status") {
+          return send(200, { output: { state: "on", url: "https://bridge-test.tunnel.test", error: "" } })
+        }
+        if (method === "qr") return send(200, { output: { svg: '<svg data-test="qr"></svg>' } })
+        return send(404, { message: "Unknown rpc" })
+      })
+      return
+    }
     if (url.pathname.startsWith("/auth/connect/")) {
       return send(200, { token: "native-token" })
     }

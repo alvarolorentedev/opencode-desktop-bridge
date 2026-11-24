@@ -1,6 +1,6 @@
 {
   "name": "@alvarolorentedev/opencode-desktop-bridge",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "One virtual OpenCode server for every server configured in OpenCode Desktop, the TUI or the web.",
   "license": "Apache-2.0",
   "publishConfig": {
@@ -14,12 +14,20 @@
     "dist",
     "docs",
     "src/tui.ts",
+    "src/server.mjs",
+    "src/server-rpc.mjs",
+    "src/core/remote.mjs",
     "README.md",
     "LICENSE"
   ],
   "exports": {
     "./gui-experimental": "./dist/gui-experimental.cjs",
-    "./tui": "./src/tui.ts"
+    "./tui": "./src/tui.ts",
+    "./server": "./src/server.mjs"
+  },
+  "dependencies": {
+    "@opentunnel/client": "0.7.0",
+    "qrcode-generator": "^2.0.4"
   },
   "scripts": {
     "build": "node scripts/build.mjs",
