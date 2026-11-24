@@ -1,6 +1,6 @@
 {
   "name": "@alvarolorentedev/opencode-desktop-bridge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "One virtual OpenCode server for every server configured in OpenCode Desktop, the TUI or the web.",
   "license": "Apache-2.0",
   "publishConfig": {
