@@ -23,6 +23,7 @@ function createBridge(options) {
   const redeem = options.redeem
   const issuePairing = options.issuePairing
   const devices = options.devices
+  const control = options.control
   const appVersion = options.appVersion || "0.0.0"
   const baseUrl = options.baseUrl || (() => `http://127.0.0.1:${state.port}`)
   const log = options.log || (() => {})
@@ -560,6 +561,10 @@ function createBridge(options) {
       sendJson(res, 404, { message: "Not found" })
       return
     }
+    if (control && control.match(pathname)) {
+      await control.handle(req, res, pathname, url.searchParams)
+      return
+    }
     const classified = classify(req.method || "GET", pathname, url.searchParams)
     if (classified.kind === "pair") {
       await handlePair(req, res, classified.code)
@@ -812,6 +817,10 @@ function createBridge(options) {
     const url = new URL(req.url || "/", "http://bridge.invalid")
     const pathname = stripBasePath(url.pathname, state.basePath)
     if (!pathname) {
+      socket.destroy()
+      return
+    }
+    if (control && control.match(pathname)) {
       socket.destroy()
       return
     }

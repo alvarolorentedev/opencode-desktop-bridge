@@ -3,7 +3,7 @@
 const test = require("node:test")
 const assert = require("node:assert/strict")
 const { execFileSync } = require("node:child_process")
-const { readFileSync } = require("node:fs")
+const { existsSync, readFileSync } = require("node:fs")
 const path = require("node:path")
 
 test("the built GUI bundle evaluates with the host's provided modules", () => {
@@ -15,6 +15,7 @@ test("the built GUI bundle evaluates with the host's provided modules", () => {
       return {
         Plugin: { define: (value) => value },
         Ipc: { define: (value) => value },
+        Store: { global: (_schema, initial) => initial },
         SettingsPage: {},
         Command: {},
         Style: {},
@@ -49,4 +50,11 @@ test("the built GUI bundle evaluates with the host's provided modules", () => {
   assert.equal(typeof definition.main, "function")
   assert.equal(typeof definition.i18n.en.title, "string")
   assert.equal(definition.i18n.en.title, "Desktop Bridge")
+})
+
+test("the package exposes the TUI part", () => {
+  const pkg = require("../package.json")
+  assert.equal(pkg.exports["./tui"], "./src/tui.ts")
+  assert.equal(pkg.files.includes("src/tui.ts"), true)
+  assert.equal(existsSync(path.join(__dirname, "..", "src", "tui.ts")), true)
 })

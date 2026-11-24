@@ -1,11 +1,13 @@
 # opencode-desktop-bridge
 
-One OpenCode server on your phone for **every server configured in OpenCode Desktop**.
+One OpenCode server on your phone for **every server configured in OpenCode Desktop, the TUI or the web**.
 
 The plugin runs inside Desktop, exposes a single OpenCode v2 API, and combines the servers Desktop already knows about. Pair with the existing `opencode pair` flow, point OpenCode Mobile at the bridge, and use existing projects, sessions and terminals without configuring each server on the phone.
 
+The same server list can also be configured from the TUI (`/bridge`) or from the web app's Desktop Bridge settings. Desktop is the live source; TUI and web entries are stored in the bridge. The phone still pairs once and sees the union.
+
 - One pairing. One connection profile. No mobile changes.
-- Desktop stays the source of truth; the bridge stores no conversations.
+- Desktop, TUI and web are configuration sources; the bridge stores the catalog, never conversations.
 - Apache-2.0, no hosted service, no subscription.
 
 ## Requirements
@@ -21,7 +23,7 @@ The plugin runs inside Desktop, exposes a single OpenCode v2 API, and combines t
 opencode plugin add opencode-desktop-bridge
 ```
 
-Restart OpenCode Desktop, then open **Settings › Desktop Bridge** and turn it on. The plugin is a GUI-only package: it adds no server-side code and never modifies Desktop.
+Restart OpenCode Desktop, then open **Settings › Desktop Bridge** and turn it on. The plugin ships a GUI part and a TUI part; it adds no separate daemon and never modifies Desktop.
 
 To build from source:
 
@@ -55,7 +57,7 @@ If the bridge is mounted under a path prefix (for example `https://host/bridge`)
 
 One normal OpenCode v2 server:
 
-- projects and sessions from every exposed Desktop server, merged;
+- projects and sessions from every exposed server, merged;
 - messages, prompts, streaming, permissions, questions, todos and diffs, routed to the owning server;
 - terminals and WebSockets, tunneled to the owning server;
 - files, VCS and worktrees for the project on screen;
@@ -67,7 +69,7 @@ Leave the bridge profile’s **working directory** empty. The pairing flow does;
 
 ## Add and remove servers
 
-Every server Desktop lists (local, remote, SSH/WSL contributions) appears in the settings page.
+Every server Desktop lists (local, remote, SSH/WSL contributions), plus TUI and web entries, appears in the settings page.
 
 - **Exposed** servers are visible to every paired device. New servers are exposed by default.
 - **Hidden** servers are ignored by the bridge; the phone cannot see they exist.
@@ -75,15 +77,42 @@ Every server Desktop lists (local, remote, SSH/WSL contributions) appears in the
 - Removing a server makes its projects and sessions disappear from the phone; an open chat on it reports that the session is no longer available.
 - Re-adding the same URL restores it.
 
+## Configure from the TUI or web
+
+The bridge has one catalog with three sources:
+
+- **Desktop**: every server Desktop reports, live.
+- **TUI**: run `/bridge` in the TUI, then add or remove servers.
+- **Web**: open **Settings › Desktop Bridge** in the web app, enter the bridge URL and admin token, and press **Sync this browser's servers**.
+
+Duplicate URLs collapse; the Desktop entry wins. The phone does not need to re-pair: it sees the union on its next list or event.
+
+### Tokens
+
+- **Admin token**: Desktop **Settings › Desktop Bridge › TUI & Web**. The TUI and web settings pages use it to write the catalog. Treat it as a password; both clients store it locally.
+- **TUI device token**: press **Create TUI token**, then:
+
+  ```bash
+  OPENCODE_PASSWORD=<token> opencode --server http://<bridge-host>:<port>
+  ```
+
+  This makes the TUI a client of the bridge, so it sees the same merged servers as the phone.
+
+`/bridge` only edits the bridge. The TUI still needs `--server` to see the merged view.
+
+The TUI part loads from the server that loads this plugin. The web settings page loads from the server that serves the web app. Both are Desktop’s own server by default.
+
 ## Security
 
 - Binds `127.0.0.1` by default. Remote binding is an explicit choice.
-- Every request and WebSocket requires a device token.
+- Data-plane requests and WebSockets require a device token.
+- The control API requires the admin token. Desktop shows it; the TUI and web app store it locally.
 - The bridge never sends upstream credentials to a client, and never logs tokens, pairing codes, prompts or source code.
 - Pairing codes are 5-minute, single-use and rate-limited.
 - Devices are revocable immediately; revocation closes their streams and sockets.
 - One token currently grants every **exposed** server, including its terminal. Expose only machines you trust the phone with.
 - Prefer Tailscale or a private network. HTTPS terminates in front of the bridge (Tailscale Serve, a reverse proxy, or a tunnel); the bridge itself is plain HTTP.
+- TUI and web sources send upstream passwords to the bridge. Use a loopback bridge or HTTPS; the admin token is a bearer credential.
 
 See [docs/security.md](docs/security.md) for the threat model.
 
@@ -93,6 +122,10 @@ The single-server view is an aggregation, not a new OpenCode engine.
 
 - **Global configuration comes from one server** (Desktop’s own by default). A session on another server may use a model or agent that the selected configuration server does not list. Existing sessions keep working with their current model; changing models or creating a session with an unsupported model can fail.
 - **Duplicate project paths** on two machines collapse into one project. New sessions and file operations for that path go to the configuration server.
+- **Duplicate server URLs** collapse in the catalog by URL. Desktop wins over TUI and web entries.
+- **TUI and web sources use Basic auth.** Manual servers authenticate with `opencode:<password>`. OIDC, custom gateway headers and per-server certificates must be configured in Desktop.
+- **TUI and web sources are manual** and have no health state; an offline manual server fails per request and does not disappear from the list.
+- **The web settings page is a configuration surface**, not a bridge client. The web app still talks to its own servers directly; the browser data-plane limits below remain.
 - **Removing a server looks like deletion**, not like “server offline”. The app has no per-server health state in this mode.
 - Sessions from different machines are distinguished only by their project path.
 - Upstream servers must speak the v2 API. v1 servers, OIDC-protected servers, and connections that rely on custom gateway headers or per-server certificates cannot be exposed.
@@ -105,10 +138,10 @@ See [docs/architecture.md](docs/architecture.md) and [docs/limits.md](docs/limit
 
 ```bash
 node scripts/build.mjs   # dist/gui-experimental.cjs
-node --test test/        # core, HTTP, SSE, WebSocket, bundle and plugin-main tests
+node --test test/        # core, catalog, control, HTTP, SSE, WebSocket, bundle, web and plugin-main tests
 ```
 
-The core has no Electron dependency: it takes server resolution, device storage and native pairing as injected functions, so the proxy and aggregation are tested against real HTTP/SSE/TCP servers. See [docs/architecture.md](docs/architecture.md).
+The core has no Electron dependency: it takes server resolution, device storage, native pairing and the catalog sources as injected functions, so the proxy, aggregation and control plane are tested against real HTTP/SSE/TCP servers. See [docs/architecture.md](docs/architecture.md).
 
 ## License
 

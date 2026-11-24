@@ -18,6 +18,7 @@ const Server = Schema.Struct({
   connected: Schema.Boolean,
   exposed: Schema.Boolean,
   configServer: Schema.Boolean,
+  source: Schema.String,
 })
 
 const Device = Schema.Struct({
@@ -42,6 +43,7 @@ const Snapshot = Schema.Struct({
   servers: Schema.Array(Server),
   devices: Schema.Array(Device),
   sidecarReady: Schema.Boolean,
+  adminToken: Schema.String,
   bridgeVersion: Schema.String,
   appVersion: Schema.String,
 })
@@ -68,6 +70,11 @@ const Pairing = Schema.Struct({
   expiresAt: Schema.Number,
 })
 
+const Token = Schema.Struct({
+  token: Schema.String,
+  id: Schema.String,
+})
+
 const BridgeIpc = Ipc.define({
   id: "opencode-desktop-bridge.bridge",
   methods: {
@@ -78,8 +85,9 @@ const BridgeIpc = Ipc.define({
     setHidden: { input: Schema.Array(Schema.String), output: Snapshot },
     setConfigServer: { input: Schema.String, output: Snapshot },
     revokeDevice: { input: Schema.String, output: Snapshot },
+    createDevice: { input: Schema.String, output: Token },
     pair: { output: Pairing },
   },
 })
 
-module.exports = { BridgeIpc, Config, Device, Snapshot, ServerReport, Network, Pairing, Status }
+module.exports = { BridgeIpc, Config, Device, Snapshot, ServerReport, Network, Pairing, Status, Token }

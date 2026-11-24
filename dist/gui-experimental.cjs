@@ -22,6 +22,7 @@ const __modules = {
       connected: Schema.Boolean,
       exposed: Schema.Boolean,
       configServer: Schema.Boolean,
+      source: Schema.String,
     })
     
     const Device = Schema.Struct({
@@ -46,6 +47,7 @@ const __modules = {
       servers: Schema.Array(Server),
       devices: Schema.Array(Device),
       sidecarReady: Schema.Boolean,
+      adminToken: Schema.String,
       bridgeVersion: Schema.String,
       appVersion: Schema.String,
     })
@@ -72,6 +74,11 @@ const __modules = {
       expiresAt: Schema.Number,
     })
     
+    const Token = Schema.Struct({
+      token: Schema.String,
+      id: Schema.String,
+    })
+    
     const BridgeIpc = Ipc.define({
       id: "opencode-desktop-bridge.bridge",
       methods: {
@@ -82,11 +89,12 @@ const __modules = {
         setHidden: { input: Schema.Array(Schema.String), output: Snapshot },
         setConfigServer: { input: Schema.String, output: Snapshot },
         revokeDevice: { input: Schema.String, output: Snapshot },
+        createDevice: { input: Schema.String, output: Token },
         pair: { output: Pairing },
       },
     })
     
-    module.exports = { BridgeIpc, Config, Device, Snapshot, ServerReport, Network, Pairing, Status }
+    module.exports = { BridgeIpc, Config, Device, Snapshot, ServerReport, Network, Pairing, Status, Token }
     
   },
   "gui/dom.js": function (module, exports, require) {
@@ -131,7 +139,7 @@ const __modules = {
     
     module.exports = {
       title: "Desktop Bridge",
-      description: "One OpenCode server on your phone for every server configured in Desktop.",
+      description: "One OpenCode server on your phone for every server configured in Desktop, the TUI or the web.",
       status: "Status",
       running: "Running",
       stopped: "Stopped",
@@ -172,6 +180,25 @@ const __modules = {
       invalidPort: "Use a port between 1 and 65535.",
       mainStarting: "Waiting for the Desktop plugin to start.",
       noSidecar: "The Desktop server is not ready yet.",
+      tuiWeb: "TUI & Web",
+      tuiWebHint: "Configure the same bridge from the terminal or the web app. Use the admin token below.",
+      adminToken: "Admin token",
+      adminTokenHint: "Used by the TUI and web settings pages to add servers to this bridge.",
+      adminTokenMissing: "Enter the bridge admin token.",
+      tuiToken: "TUI device token",
+      tuiTokenHint: "Connect the TUI to this bridge as one server.",
+      createTuiToken: "Create TUI token",
+      webHint: "Web: open Settings › Desktop Bridge, enter the bridge URL and admin token, then sync this browser's servers.",
+      webTitle: "Web sync",
+      webPageDescription: "Sync this browser's OpenCode servers into the Desktop Bridge.",
+      webUrlHint: "The bridge address the web app writes to.",
+      webTokenHint: "From Desktop Settings › Desktop Bridge › Admin token.",
+      webServers: "This browser's servers",
+      webServersHint: "These servers are added to the bridge under the web source.",
+      noServers: "No servers to sync.",
+      syncServers: "Sync this browser's servers",
+      syncDone: "Synced {count} servers.",
+      refreshStatus: "Refresh status",
     }
     
   },
@@ -217,7 +244,7 @@ const __modules = {
     }
     
     function setup(ctx) {
-      if (!ctx.desktop) return
+      if (!ctx.desktop) return setupWeb(ctx)
       ctx.add(Style, css)
     
       const ipc = ctx.main(BridgeIpc)
@@ -332,9 +359,11 @@ const __modules = {
       const devicesBox = el("div", { class: "odb-list" })
       const pairBox = el("div", { class: "odb-card" })
       const diagBox = el("div", { class: "odb-list" })
+      const tuiWebBox = el("div", { class: "odb-list" })
     
       let snapshot
       let pairing
+      let tuiToken
     
       function showError(error) {
         errorBox.textContent = error instanceof Error ? error.message : String(error || "")
@@ -375,7 +404,7 @@ const __modules = {
           const label = el("label", { class: "odb-item" }, [
             checkbox,
             el("span", { class: "odb-item-name" }, server.name),
-            el("span", { class: "odb-muted" }, server.id === "sidecar" ? "desktop" : server.connected ? "" : "offline"),
+            el("span", { class: "odb-muted" }, server.source && server.source !== "desktop" ? server.source : server.id === "sidecar" ? "desktop" : server.connected ? "" : "offline"),
           ])
           const actions = el("div", { class: "odb-actions" }, [])
           if (server.configServer) {
@@ -454,6 +483,64 @@ const __modules = {
         pairBox.append(pair, el("div", { class: "odb-actions" }, [copyCommand]), manual, hint)
       }
     
+      function renderTuiWeb(snap) {
+        clear(tuiWebBox)
+        const base = snap.status.baseUrl || snap.status.addresses[0] || ""
+        const admin = el("input", { class: "odb-input", value: snap.adminToken || "", readonly: "readonly", spellcheck: "false" })
+        const copyAdmin = el("button", { class: "odb-button" }, t("copy"))
+        copyAdmin.onclick = () => copy(snap.adminToken || "", copyAdmin)
+        tuiWebBox.append(
+          el("div", { class: "odb-row" }, [
+            el("div", { class: "odb-row-copy" }, [
+              el("div", { class: "odb-row-title" }, t("adminToken")),
+              el("div", { class: "odb-muted" }, t("adminTokenHint")),
+            ]),
+            el("div", { class: "odb-actions" }, [admin, copyAdmin]),
+          ]),
+        )
+        if (tuiToken) {
+          const token = el("div", { class: "odb-code" }, tuiToken)
+          const command = el("div", { class: "odb-code" }, `OPENCODE_PASSWORD=${tuiToken} opencode --server ${base}`)
+          const copyToken = el("button", { class: "odb-button" }, t("copy"))
+          copyToken.onclick = () => copy(tuiToken, copyToken)
+          const copyCommand = el("button", { class: "odb-button" }, t("copy"))
+          copyCommand.onclick = () => copy(`OPENCODE_PASSWORD=${tuiToken} opencode --server ${base}`, copyCommand)
+          tuiWebBox.append(
+            el("div", { class: "odb-row" }, [
+              el("div", { class: "odb-row-copy" }, [
+                el("div", { class: "odb-row-title" }, t("tuiToken")),
+                el("div", { class: "odb-muted" }, t("tuiTokenHint")),
+              ]),
+            ]),
+            token,
+            el("div", { class: "odb-actions" }, [copyToken]),
+            command,
+            el("div", { class: "odb-actions" }, [copyCommand]),
+          )
+        } else {
+          const create = el("button", { class: "odb-button" }, t("createTuiToken"))
+          create.onclick = async () => {
+            try {
+              const result = await ipc.createDevice("TUI")
+              tuiToken = result.token
+              renderTuiWeb(snapshot)
+            } catch (error) {
+              showError(error)
+            }
+          }
+          tuiWebBox.append(
+            el("div", { class: "odb-row" }, [
+              el("div", { class: "odb-row-copy" }, [
+                el("div", { class: "odb-row-title" }, t("tuiToken")),
+                el("div", { class: "odb-muted" }, t("tuiTokenHint")),
+              ]),
+              create,
+            ]),
+          )
+        }
+        tuiWebBox.append(el("div", { class: "odb-muted" }, t("webHint")))
+      }
+    
       function renderDiagnostics(snap) {
         clear(diagBox)
         const line = (title, value) =>
@@ -496,6 +583,7 @@ const __modules = {
         if (pairing && pairing.expiresAt < Date.now()) pairing = undefined
         renderPairing(snap)
         renderDiagnostics(snap)
+        renderTuiWeb(snap)
         if (!snap.config.enabled) pairing = undefined
       }
     
@@ -550,6 +638,7 @@ const __modules = {
         ]),
         section(t("servers"), [row(t("servers"), t("serversHint"), serversBox)]),
         section(t("pairing"), [row(t("pairing"), t("pairingHint"), pairBox)]),
+        section(t("tuiWeb"), [row(t("tuiWeb"), t("tuiWebHint"), tuiWebBox)]),
         section(t("devices"), [row(t("devices"), null, devicesBox)]),
         section(t("diagnostics"), [row(t("diagnostics"), null, diagBox)]),
         errorBox,
@@ -577,7 +666,249 @@ const __modules = {
       return page
     }
     
-    module.exports = { setup, renderPage }
+    function translate(ctx, key) {
+      try {
+        const value = ctx.t(key)
+        return value === key ? strings[key] || key : value
+      } catch {
+        return strings[key] || key
+      }
+    }
+    
+    function copyValue(value, button, copied) {
+      if (!navigator.clipboard || !navigator.clipboard.writeText) return
+      void navigator.clipboard.writeText(value).then(() => {
+        const previous = button.textContent
+        button.textContent = copied
+        setTimeout(() => (button.textContent = previous), 1200)
+      })
+    }
+    
+    function webRow(ctx, title, description, control) {
+      if (ctx.ui && typeof ctx.ui.SettingsRow === "function") {
+        try {
+          return createComponent(ctx.ui.SettingsRow, { title: title || "", description: description || undefined, children: control })
+        } catch {
+          // Fall through to the plain row.
+        }
+      }
+      return el("div", { class: "odb-row" }, [
+        el("div", { class: "odb-row-copy" }, [
+          title ? el("div", { class: "odb-row-title" }, title) : null,
+          description ? el("div", { class: "odb-muted" }, description) : null,
+        ]),
+        control,
+      ])
+    }
+    
+    function webSection(ctx, title, rows) {
+      if (ctx.ui && typeof ctx.ui.SettingsSection === "function") {
+        try {
+          return createComponent(ctx.ui.SettingsSection, { title, children: rows })
+        } catch {
+          // Fall through to the plain section.
+        }
+      }
+      return el("div", { class: "odb" }, [title ? el("div", { class: "odb-tag" }, title) : null, ...rows])
+    }
+    
+    function setupWeb(ctx) {
+      ctx.add(Style, css)
+      const t = (key) => translate(ctx, key)
+      const page = renderWebPage(ctx)
+      ctx.add(SettingsPage, {
+        id: "desktop-bridge-web",
+        get title() {
+          return t("title")
+        },
+        render: () => page,
+      })
+      ctx.add(Command, {
+        id: "open-web",
+        get title() {
+          return t("open")
+        },
+        get group() {
+          return t("commandGroup")
+        },
+        run: () => {
+          if (ctx.layout && typeof ctx.layout.settings === "function") ctx.layout.settings("desktop-bridge-web")
+        },
+      })
+    }
+    
+    function renderWebPage(ctx) {
+      const t = (key) => translate(ctx, key)
+      const store = ctx.stores && ctx.stores.web
+      const initial = store && store.value ? store.value : { url: "http://127.0.0.1:47821", token: "" }
+    
+      const url = el("input", { class: "odb-input", value: initial.url, spellcheck: "false" })
+      const token = el("input", { class: "odb-input", value: initial.token, spellcheck: "false" })
+      const listBox = el("div", { class: "odb-list" })
+      const output = el("div", { class: "odb-card" })
+      const errorBox = el("div", { class: "odb-error" })
+    
+      function base() {
+        return (url.value.trim() || "http://127.0.0.1:47821").replace(/\/+$/, "")
+      }
+    
+      function adminToken() {
+        return token.value.trim()
+      }
+    
+      function remember() {
+        if (!store || typeof store.update !== "function") return
+        const nextUrl = url.value.trim()
+        const nextToken = token.value.trim()
+        store.update((draft) => {
+          draft.url = nextUrl
+          draft.token = nextToken
+        })
+      }
+    
+      url.onchange = remember
+      token.onchange = remember
+    
+      function showError(error) {
+        errorBox.textContent = error instanceof Error ? error.message : String(error || "")
+      }
+    
+      function normalize(value) {
+        try {
+          const parsed = new URL(value)
+          if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined
+          if (parsed.username || parsed.password) return undefined
+          return parsed.href.replace(/\/+$/, "")
+        } catch {
+          return undefined
+        }
+      }
+    
+      function collect() {
+        const bridge = normalize(base())
+        const result = []
+        if (!ctx.servers || typeof ctx.servers.list !== "function" || typeof ctx.servers.get !== "function") return result
+        for (const id of ctx.servers.list()) {
+          const server = ctx.servers.get(id)
+          if (!server || !server.url) continue
+          const address = normalize(server.url)
+          if (!address || address === bridge) continue
+          if (/^https?:\/\/127\.0\.0\.1:0$/.test(address)) continue
+          result.push({ name: server.name || address, url: address, password: server.password || "" })
+        }
+        return result
+      }
+    
+      function renderList() {
+        clear(listBox)
+        const servers = collect()
+        if (!servers.length) {
+          listBox.append(el("div", { class: "odb-muted" }, t("noServers")))
+          return
+        }
+        for (const server of servers) {
+          listBox.append(
+            el("div", { class: "odb-row" }, [
+              el("div", { class: "odb-row-copy" }, [
+                el("div", { class: "odb-row-title" }, server.name),
+                el("div", { class: "odb-muted" }, server.url),
+              ]),
+            ]),
+          )
+        }
+      }
+    
+      async function api(path, options = {}) {
+        const value = adminToken()
+        if (!value) throw new Error(t("adminTokenMissing"))
+        const headers = { ...(options.headers || {}), authorization: `Bearer ${value}` }
+        if (options.body !== undefined) headers["content-type"] = "application/json"
+        const response = await fetch(`${base()}/bridge/v1/admin${path}`, { ...options, headers })
+        const body = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(body && body.message ? body.message : `Request failed (${response.status})`)
+        return body
+      }
+    
+      function showLink(link) {
+        clear(output)
+        const code = el("div", { class: "odb-code" }, link)
+        const copy = el("button", { class: "odb-button" }, t("copy"))
+        copy.onclick = () => copyValue(link, copy, t("copied"))
+        output.append(code, el("div", { class: "odb-actions" }, [copy]))
+      }
+    
+      const sync = el("button", { class: "odb-button" }, t("syncServers"))
+      sync.onclick = async () => {
+        errorBox.textContent = ""
+        try {
+          remember()
+          const servers = collect()
+          const result = await api("/servers/web", { method: "PUT", body: JSON.stringify({ servers }) })
+          clear(output)
+          output.append(
+            el("div", { class: "odb-muted" }, t("syncDone").replace("{count}", String(result.data.length))),
+          )
+          renderList()
+        } catch (error) {
+          showError(error)
+        }
+      }
+    
+      const pair = el("button", { class: "odb-button" }, t("pair"))
+      pair.onclick = async () => {
+        errorBox.textContent = ""
+        try {
+          remember()
+          const result = await api("/pair", { method: "POST" })
+          showLink(result.link)
+        } catch (error) {
+          showError(error)
+        }
+      }
+    
+      const status = el("button", { class: "odb-button" }, t("refreshStatus"))
+      status.onclick = async () => {
+        errorBox.textContent = ""
+        try {
+          remember()
+          const result = await api("/status")
+          clear(output)
+          output.append(
+            el("div", { class: "odb-muted" }, `${result.baseUrl || base()} · ${result.sources.map((source) => `${source.name}: ${source.count}`).join(" · ")}`),
+          )
+          renderList()
+        } catch (error) {
+          showError(error)
+        }
+      }
+    
+      const root = el("div", { class: "odb" }, [
+        webSection(ctx, t("webTitle"), [
+          webRow(ctx, t("bridgeUrl"), t("webUrlHint"), url),
+          webRow(ctx, t("adminToken"), t("webTokenHint"), token),
+          webRow(ctx, t("webServers"), t("webServersHint"), listBox),
+          webRow(ctx, null, null, el("div", { class: "odb-actions" }, [sync, pair, status])),
+        ]),
+        output,
+        errorBox,
+      ])
+    
+      renderList()
+      if (ctx.ui && typeof ctx.ui.SettingsLayout === "function") {
+        try {
+          return createComponent(ctx.ui.SettingsLayout, {
+            title: t("title"),
+            description: t("webPageDescription"),
+            children: root,
+          })
+        } catch {
+          return root
+        }
+      }
+      return root
+    }
+    
+    module.exports = { setup, setupWeb, renderPage, renderWebPage }
     
   },
   "core/routing.js": function (module, exports, require) {
@@ -771,7 +1102,11 @@ const __modules = {
       return error instanceof Error ? error.message : String(error)
     }
     
-    module.exports = { randomId, sha256, joinPath, parseUrl, truncate, errorMessage }
+    function basicAuth(password) {
+      return `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`
+    }
+    
+    module.exports = { randomId, sha256, joinPath, parseUrl, truncate, errorMessage, basicAuth }
     
   },
   "core/http.js": function (module, exports, require) {
@@ -1198,6 +1533,7 @@ const __modules = {
       const redeem = options.redeem
       const issuePairing = options.issuePairing
       const devices = options.devices
+      const control = options.control
       const appVersion = options.appVersion || "0.0.0"
       const baseUrl = options.baseUrl || (() => `http://127.0.0.1:${state.port}`)
       const log = options.log || (() => {})
@@ -1735,6 +2071,10 @@ const __modules = {
           sendJson(res, 404, { message: "Not found" })
           return
         }
+        if (control && control.match(pathname)) {
+          await control.handle(req, res, pathname, url.searchParams)
+          return
+        }
         const classified = classify(req.method || "GET", pathname, url.searchParams)
         if (classified.kind === "pair") {
           await handlePair(req, res, classified.code)
@@ -1990,6 +2330,10 @@ const __modules = {
           socket.destroy()
           return
         }
+        if (control && control.match(pathname)) {
+          socket.destroy()
+          return
+        }
         const device = authenticate(req, url)
         if (!device) {
           socket.end('HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm="opencode"\r\nContent-Length: 0\r\n\r\n')
@@ -2103,6 +2447,399 @@ const __modules = {
     module.exports = { createBridge }
     
   },
+  "core/catalog.js": function (module, exports, require) {
+    "use strict"
+    
+    const { sha256 } = require("@b/core/util.js")
+    
+    // Normalizes an upstream URL to the identity the catalog dedupes on.
+    function normalizeUrl(value) {
+      if (typeof value !== "string") return undefined
+      let url
+      try {
+        url = new URL(value.trim())
+      } catch {
+        return undefined
+      }
+      if (url.protocol !== "http:" && url.protocol !== "https:") return undefined
+      if (url.username || url.password) return undefined
+      url.hash = ""
+      url.search = ""
+      return url.href.replace(/\/+$/, "")
+    }
+    
+    function manualId(source, url) {
+      return `${source}:${sha256(url).slice(0, 16)}`
+    }
+    
+    // One list for every configuration source: Desktop's live servers, plus the
+    // manual sources the TUI and web clients write through the control plane.
+    function createCatalog(options) {
+      const sources = Array.isArray(options.sources) ? options.sources : []
+      const hidden = options.hidden || (() => [])
+      const selected = options.configServer || (() => undefined)
+      const log = options.log || (() => {})
+    
+      function hiddenSet() {
+        try {
+          const value = hidden()
+          return value instanceof Set ? value : new Set(Array.isArray(value) ? value : [])
+        } catch (error) {
+          log("warn", "bridge hidden list failed", { error: String(error && error.message ? error.message : error) })
+          return new Set()
+        }
+      }
+    
+      function all() {
+        const seen = new Map()
+        const ids = new Set()
+        const result = []
+        const excluded = hiddenSet()
+        for (const source of sources) {
+          let entries
+          try {
+            entries = source.entries()
+          } catch (error) {
+            log("warn", "bridge source failed", {
+              source: source.id,
+              error: String(error && error.message ? error.message : error),
+            })
+            continue
+          }
+          if (!Array.isArray(entries)) continue
+          for (const raw of entries) {
+            if (!raw || typeof raw.id !== "string" || !raw.id) continue
+            const url = normalizeUrl(raw.url)
+            if (!url || seen.has(url)) continue
+            let id = raw.id
+            if (ids.has(id)) id = `${source.id}:${id}`
+            while (ids.has(id)) id = `${source.id}:${id}`
+            ids.add(id)
+            const entry = {
+              id,
+              name: typeof raw.name === "string" && raw.name ? raw.name : raw.id,
+              url,
+              headers: raw.headers,
+              source: source.id,
+              connected: raw.connected !== false,
+              builtin: Boolean(raw.builtin),
+              local: Boolean(raw.local),
+              exposed: !excluded.has(id),
+            }
+            seen.set(url, entry)
+            result.push(entry)
+          }
+        }
+        return result
+      }
+    
+      function exposed() {
+        return all().filter((entry) => entry.exposed)
+      }
+    
+      function configServer() {
+        const visible = exposed()
+        if (!visible.length) return undefined
+        let wanted
+        try {
+          wanted = selected()
+        } catch {
+          wanted = undefined
+        }
+        return (
+          visible.find((entry) => entry.id === wanted) ||
+          visible.find((entry) => entry.builtin) ||
+          visible.find((entry) => entry.source === "desktop") ||
+          visible[0]
+        ).id
+      }
+    
+      function resolve(id) {
+        if (typeof id !== "string" || !id) return undefined
+        const entry = all().find((item) => item.id === id)
+        if (!entry) return undefined
+        return { url: entry.url, headers: entry.headers }
+      }
+    
+      function servers() {
+        return exposed().map((entry) => ({
+          id: entry.id,
+          name: entry.name,
+          connected: entry.connected,
+          builtin: entry.builtin,
+          local: entry.local,
+          source: entry.source,
+        }))
+      }
+    
+      function snapshot() {
+        const current = configServer()
+        return all().map((entry) => ({
+          id: entry.id,
+          name: entry.name,
+          connected: entry.connected,
+          builtin: entry.builtin,
+          local: entry.local,
+          source: entry.source,
+          exposed: entry.exposed,
+          configServer: entry.id === current,
+        }))
+      }
+    
+      return { all, exposed, servers, resolve, configServer, snapshot }
+    }
+    
+    module.exports = { createCatalog, normalizeUrl, manualId }
+    
+  },
+  "core/control.js": function (module, exports, require) {
+    "use strict"
+    
+    const { timingSafeEqual } = require("node:crypto")
+    const { bufferJson, sendJson } = require("@b/core/http.js")
+    const { normalizeUrl, manualId } = require("@b/core/catalog.js")
+    
+    const PREFIX = "/bridge/v1/admin"
+    const MAX_BODY = 256 * 1024
+    const MAX_SERVERS = 64
+    
+    const DEFAULT_SOURCES = [
+      { id: "desktop", name: "OpenCode Desktop", writable: false },
+      { id: "tui", name: "TUI", writable: true },
+      { id: "web", name: "Web", writable: true },
+    ]
+    
+    function createControlPlane(options) {
+      const adminToken = options.adminToken
+      const sources = Array.isArray(options.sources) && options.sources.length ? options.sources : DEFAULT_SOURCES
+      const readSource = options.readSource
+      const writeSource = options.writeSource
+      const snapshot = options.snapshot || (() => [])
+      const pair = options.pair
+      const baseUrl = options.baseUrl || (() => "")
+      const version = options.version || "0.0.0"
+      const onChange = options.onChange || (() => {})
+      const log = options.log || (() => {})
+    
+      function match(pathname) {
+        return pathname === PREFIX || pathname.startsWith(`${PREFIX}/`)
+      }
+    
+      function cors(req, res) {
+        const origin = req.headers.origin
+        if (typeof origin !== "string" || !origin) return
+        res.setHeader("access-control-allow-origin", origin)
+        res.setHeader("vary", "Origin")
+        res.setHeader("access-control-allow-headers", "authorization, content-type, x-bridge-admin-token")
+        res.setHeader("access-control-allow-methods", "GET, POST, PUT, DELETE, OPTIONS")
+        res.setHeader("access-control-max-age", "600")
+        if (req.headers["access-control-request-private-network"] === "true") {
+          res.setHeader("access-control-allow-private-network", "true")
+        }
+      }
+    
+      function tokenOf(req) {
+        const header = req.headers.authorization
+        if (typeof header === "string") {
+          const bearer = /^Bearer\s+(.+)$/i.exec(header)
+          if (bearer) return bearer[1].trim()
+        }
+        const custom = req.headers["x-bridge-admin-token"]
+        return typeof custom === "string" ? custom.trim() : undefined
+      }
+    
+      function authorized(req) {
+        let expected
+        try {
+          expected = String(adminToken() || "")
+        } catch {
+          return false
+        }
+        if (!expected) return false
+        const provided = tokenOf(req)
+        if (!provided) return false
+        const left = Buffer.from(provided)
+        const right = Buffer.from(expected)
+        return left.length === right.length && timingSafeEqual(left, right)
+      }
+    
+      function sourceOf(id) {
+        return sources.find((source) => source.id === id && source.writable)
+      }
+    
+      function read(id) {
+        const value = readSource(id)
+        return Array.isArray(value) ? value : []
+      }
+    
+      function redact(list) {
+        return list.map((item) => ({
+          id: item.id,
+          name: item.name,
+          url: item.url,
+          hasPassword: Boolean(item.password),
+        }))
+      }
+    
+      function normalize(input, source) {
+        if (!input || typeof input !== "object") throw new Error("A server object is required.")
+        const url = normalizeUrl(input.url)
+        if (!url) throw new Error("Use an http(s) URL without credentials.")
+        if (url === normalizeUrl(baseUrl())) throw new Error("A source cannot point at this bridge.")
+        const password = typeof input.password === "string" ? input.password : ""
+        if (password.length > 1024) throw new Error("The password is too long.")
+        const name = typeof input.name === "string" && input.name.trim()
+          ? input.name.trim().slice(0, 120)
+          : new URL(url).host
+        return { id: manualId(source, url), name, url, password }
+      }
+    
+      function list(source) {
+        return {
+          source: source.id,
+          data: redact(read(source.id)),
+        }
+      }
+    
+      function replace(id, body) {
+        const source = sourceOf(id)
+        if (!source) return undefined
+        if (!body || !Array.isArray(body.servers)) throw new Error("Expected a servers array.")
+        if (body.servers.length > MAX_SERVERS) throw new Error(`At most ${MAX_SERVERS} servers are supported.`)
+        const seen = new Set()
+        const next = []
+        for (const item of body.servers) {
+          const entry = normalize(item, id)
+          if (seen.has(entry.url)) continue
+          seen.add(entry.url)
+          next.push(entry)
+        }
+        writeSource(id, next)
+        onChange(id, next)
+        return list(source)
+      }
+    
+      function add(id, body) {
+        const source = sourceOf(id)
+        if (!source) return undefined
+        const entry = normalize(body, id)
+        const current = read(id)
+        if (!current.some((item) => item.url === entry.url) && current.length >= MAX_SERVERS) {
+          throw new Error(`At most ${MAX_SERVERS} servers are supported.`)
+        }
+        const next = [entry, ...current.filter((item) => item.url !== entry.url)]
+        writeSource(id, next)
+        onChange(id, next)
+        return list(source)
+      }
+    
+      function remove(id, entryId) {
+        const source = sourceOf(id)
+        if (!source) return undefined
+        const current = read(id)
+        const next = current.filter((item) => item.id !== entryId)
+        if (next.length === current.length) return undefined
+        writeSource(id, next)
+        onChange(id, next)
+        return list(source)
+      }
+    
+      function sourceList() {
+        const servers = snapshot()
+        return sources.map((source) => ({
+          id: source.id,
+          name: source.name,
+          writable: source.writable,
+          count: source.writable ? read(source.id).length : servers.filter((item) => item.source === source.id).length,
+        }))
+      }
+    
+      async function handle(req, res, pathname, searchParams) {
+        cors(req, res)
+        if (req.method === "OPTIONS") {
+          res.writeHead(204, { "content-length": "0" })
+          res.end()
+          return
+        }
+        if (!authorized(req)) {
+          sendJson(res, 401, { message: "Bridge admin token required." })
+          return
+        }
+        const path = pathname.slice(PREFIX.length) || "/"
+        try {
+          if (req.method === "GET" && path === "/status") {
+            sendJson(res, 200, {
+              bridge: 1,
+              version,
+              baseUrl: baseUrl(),
+              sources: sourceList(),
+              servers: snapshot(),
+            })
+            return
+          }
+          if (req.method === "GET" && path === "/servers") {
+            sendJson(res, 200, { data: snapshot(), sources: sourceList() })
+            return
+          }
+          const sourcePath = /^\/sources\/([^/]+)$/.exec(path)
+          if (req.method === "GET" && sourcePath) {
+            const source = sourceOf(decodeURIComponent(sourcePath[1]))
+            if (!source) {
+              sendJson(res, 404, { message: "Unknown source." })
+              return
+            }
+            sendJson(res, 200, list(source))
+            return
+          }
+          const replacePath = /^\/servers\/([^/]+)$/.exec(path)
+          if (replacePath) {
+            const id = decodeURIComponent(replacePath[1])
+            if (!sourceOf(id)) {
+              sendJson(res, 404, { message: "Unknown source." })
+              return
+            }
+            if (req.method === "PUT") {
+              const body = (await bufferJson(req, MAX_BODY)).body
+              sendJson(res, 200, replace(id, body))
+              return
+            }
+            if (req.method === "POST") {
+              const body = (await bufferJson(req, MAX_BODY)).body
+              sendJson(res, 200, add(id, body))
+              return
+            }
+          }
+          const removePath = /^\/servers\/([^/]+)\/([^/]+)$/.exec(path)
+          if (req.method === "DELETE" && removePath) {
+            const id = decodeURIComponent(removePath[1])
+            const entryId = decodeURIComponent(removePath[2])
+            const result = remove(id, entryId)
+            if (!result) {
+              sendJson(res, 404, { message: "Server not found in this source." })
+              return
+            }
+            sendJson(res, 200, result)
+            return
+          }
+          if (req.method === "POST" && path === "/pair") {
+            const result = await pair()
+            sendJson(res, 200, { link: result.link, expiresAt: result.expiresAt })
+            return
+          }
+          sendJson(res, 404, { message: "Not found" })
+        } catch (error) {
+          log("warn", "bridge control request failed", { path, error: error instanceof Error ? error.message : String(error) })
+          if (!res.headersSent) sendJson(res, 400, { message: error instanceof Error ? error.message : "Invalid request." })
+          else res.destroy()
+        }
+      }
+    
+      return { match, handle }
+    }
+    
+    module.exports = { createControlPlane, PREFIX, DEFAULT_SOURCES }
+    
+  },
   "core/devices.js": function (module, exports, require) {
     "use strict"
     
@@ -2201,6 +2938,8 @@ const __modules = {
   "core/registry.js": function (module, exports, require) {
     "use strict"
     
+    // Desktop discovery only. The catalog decides exposure, the configuration
+    // server and deduplication across Desktop, TUI and web sources.
     function createServerRegistry(options) {
       const getConfig = options.getConfig
       const setConfig = options.setConfig
@@ -2248,44 +2987,21 @@ const __modules = {
         })
       }
     
-      function exposed() {
-        const config = getConfig()
-        const hidden = new Set(config.hiddenServers || [])
-        return servers().filter((item) => !hidden.has(item.id))
-      }
-    
-      function configServer() {
-        const config = getConfig()
-        const visible = exposed()
-        const preferred = visible.find((item) => item.id === config.configServer)
-        if (preferred) return preferred.id
-        return visible[0] ? visible[0].id : undefined
-      }
-    
       function setHidden(ids) {
         const config = getConfig()
         const next = [...new Set((Array.isArray(ids) ? ids : []).filter((id) => typeof id === "string" && id))]
         setConfig({ ...config, hiddenServers: next })
-        changed()
       }
     
       function setConfigServer(id) {
         const config = getConfig()
         setConfig({ ...config, configServer: id })
-        changed()
       }
     
       function signature() {
-        const selected = (() => {
-          try {
-            return configServer() || ""
-          } catch {
-            return ""
-          }
-        })()
-        return `${selected}|${exposed()
-          .map((item) => `${item.id}:${item.name}:${item.connected ? 1 : 0}`)
-          .join("|")}`
+        return servers()
+          .map((item) => `${item.id}:${item.name}:${item.connected ? 1 : 0}:${item.builtin ? 1 : 0}:${item.local ? 1 : 0}`)
+          .join("|")
       }
     
       function changed() {
@@ -2295,18 +3011,7 @@ const __modules = {
         onChange()
       }
     
-      function snapshot() {
-        const config = getConfig()
-        const hidden = new Set(config.hiddenServers || [])
-        const selected = configServer()
-        return servers().map((item) => ({
-          ...item,
-          exposed: !hidden.has(item.id),
-          configServer: item.id === selected,
-        }))
-      }
-    
-      return { report, forget, servers, exposed, configServer, setHidden, setConfigServer, snapshot }
+      return { report, forget, servers, setHidden, setConfigServer }
     }
     
     module.exports = { createServerRegistry }
@@ -2447,6 +3152,8 @@ const __modules = {
     "use strict"
     
     const { createBridge } = require("@b/core/bridge.js")
+    const { createCatalog, normalizeUrl, manualId } = require("@b/core/catalog.js")
+    const { createControlPlane } = require("@b/core/control.js")
     const { createDeviceStore } = require("@b/core/devices.js")
     const { createServerRegistry } = require("@b/core/registry.js")
     const { issuePairing, redeemPairing } = require("@b/core/native.js")
@@ -2454,11 +3161,15 @@ const __modules = {
     
     module.exports = {
       createBridge,
+      createCatalog,
+      createControlPlane,
       createDeviceStore,
       createServerRegistry,
       issuePairing,
       redeemPairing,
       normalizeConfig,
+      normalizeUrl,
+      manualId,
       reachableAddresses,
       addressHint,
       ipv4Addresses,
@@ -2472,6 +3183,8 @@ const __modules = {
     const { BridgeIpc, Config } = require("@b/gui/contract.js")
     const {
       createBridge,
+      createCatalog,
+      createControlPlane,
       createDeviceStore,
       createServerRegistry,
       issuePairing,
@@ -2481,7 +3194,7 @@ const __modules = {
       addressHint,
     } = require("@b/core/index.js")
     const { DEFAULT_CONFIG } = require("@b/core/config.js")
-    const { errorMessage } = require("@b/core/util.js")
+    const { basicAuth, errorMessage, randomId } = require("@b/core/util.js")
     
     const VERSION = "0.1.0"
     
@@ -2494,9 +3207,25 @@ const __modules = {
       expiresAt: Schema.Number,
     })
     
+    const ManualServer = Schema.Struct({
+      id: Schema.String,
+      name: Schema.String,
+      url: Schema.String,
+      password: Schema.String,
+    })
+    
+    const Sources = Schema.Struct({
+      tui: Schema.Array(ManualServer),
+      web: Schema.Array(ManualServer),
+    })
+    
+    const Admin = Schema.Struct({ token: Schema.String })
+    
     function setup(ctx) {
       const configStore = ctx.storage.store("config", { schema: Config, initial: DEFAULT_CONFIG })
       const deviceStore = ctx.storage.store("devices", { schema: Schema.Array(DeviceRecord), initial: [] })
+      const sourcesStore = ctx.storage.store("sources", { schema: Sources, initial: { tui: [], web: [] } })
+      const adminStore = ctx.storage.store("admin", { schema: Admin, initial: { token: randomId("adm_", 32) } })
       const endpoints = ctx.serverEndpoints
     
       function writeLog(level, message, data) {
@@ -2531,9 +3260,83 @@ const __modules = {
         onChange: () => bridge?.notifyChanged(),
       })
     
+      function desktopEntries() {
+        const entries = []
+        for (const item of registry.servers()) {
+          const endpoint = endpoints && endpoints.get(item.id)
+          if (!endpoint || typeof endpoint.url !== "string") continue
+          entries.push({
+            id: item.id,
+            name: item.name,
+            url: endpoint.url,
+            headers: endpoint.headers,
+            connected: item.connected,
+            builtin: item.builtin,
+            local: item.local,
+          })
+        }
+        return entries
+      }
+    
+      function manualEntries(list) {
+        return (Array.isArray(list) ? list : []).map((item) => ({
+          id: item.id,
+          name: item.name,
+          url: item.url,
+          headers: item.password ? { authorization: basicAuth(item.password) } : undefined,
+          connected: true,
+        }))
+      }
+    
+      // Every configuration surface contributes here. Desktop is live; the TUI and
+      // web sources are written through the admin control plane.
+      const catalog = createCatalog({
+        hidden: () => getConfig().hiddenServers,
+        configServer: () => getConfig().configServer,
+        log: writeLog,
+        sources: [
+          { id: "desktop", name: "OpenCode Desktop", entries: desktopEntries },
+          { id: "tui", name: "TUI", entries: () => manualEntries(sourcesStore.value.tui) },
+          { id: "web", name: "Web", entries: () => manualEntries(sourcesStore.value.web) },
+        ],
+      })
+    
+      function readSource(id) {
+        const value = sourcesStore.value
+        return Array.isArray(value[id]) ? value[id] : []
+      }
+    
+      function writeSource(id, list) {
+        sourcesStore.set({ ...sourcesStore.value, [id]: list })
+      }
+    
       function baseFor(config) {
         return normalizeConfig(config).value.publicUrl || addressHint(normalizeConfig(config).value)
       }
+    
+      async function pairLink() {
+        const endpoint = endpoints && endpoints.get("sidecar")
+        if (!endpoint) throw new Error("The Desktop server is not ready yet.")
+        const result = await issuePairing(endpoint)
+        return {
+          link: `${baseFor(getConfig())}/auth/connect/${encodeURIComponent(result.code)}`,
+          expiresAt: Date.now() + (result.expiresIn || 300) * 1000,
+        }
+      }
+    
+      const control = createControlPlane({
+        adminToken: () => adminStore.value.token,
+        readSource,
+        writeSource,
+        snapshot: () => catalog.snapshot(),
+        baseUrl: () => baseFor(getConfig()),
+        version: VERSION,
+        pair: pairLink,
+        log: writeLog,
+        onChange: () => {
+          bridge?.notifyChanged()
+        },
+      })
     
       async function apply() {
         const previous = bridge
@@ -2557,12 +3360,9 @@ const __modules = {
     
         status.state = "starting"
         const instance = createBridge({
-          resolveServer: (id) => {
-            const endpoint = endpoints && endpoints.get(id)
-            return endpoint ? { url: endpoint.url, headers: endpoint.headers } : undefined
-          },
-          servers: () => registry.exposed(),
-          configServer: () => registry.configServer(),
+          resolveServer: (id) => catalog.resolve(id),
+          servers: () => catalog.servers(),
+          configServer: () => catalog.configServer(),
           redeem: async (code) => {
             const endpoint = endpoints && endpoints.get("sidecar")
             if (!endpoint) return false
@@ -2574,6 +3374,7 @@ const __modules = {
             return issuePairing(endpoint)
           },
           devices,
+          control,
           appVersion: ctx.app.version,
           baseUrl: () => baseFor(getConfig()),
           log: writeLog,
@@ -2633,9 +3434,10 @@ const __modules = {
             addresses: reachableAddresses(config),
             port: bridge ? bridge.port : status.port,
           },
-          servers: registry.snapshot(),
+          servers: catalog.snapshot(),
           devices: devices.list(),
           sidecarReady: Boolean(endpoints && endpoints.get("sidecar")),
+          adminToken: adminStore.value.token,
           bridgeVersion: VERSION,
           appVersion: ctx.app.version,
         }
@@ -2643,14 +3445,10 @@ const __modules = {
     
       async function pair() {
         if (status.state !== "running") throw new Error("Start the bridge before pairing a device.")
-        const endpoint = endpoints && endpoints.get("sidecar")
-        if (!endpoint) throw new Error("The Desktop server is not ready yet.")
-        const result = await issuePairing(endpoint)
-        const base = baseFor(getConfig())
+        const result = await pairLink()
         return {
-          link: `${base}/auth/connect/${encodeURIComponent(result.code)}`,
-          command: `opencode pair --url ${base}`,
-          expiresAt: Date.now() + result.expiresIn * 1000,
+          ...result,
+          command: `opencode pair --url ${baseFor(getConfig())}`,
         }
       }
     
@@ -2673,16 +3471,22 @@ const __modules = {
         },
         setHidden: async (ids) => {
           registry.setHidden(ids)
+          bridge?.notifyChanged()
           return snapshot()
         },
         setConfigServer: async (id) => {
           registry.setConfigServer(id)
+          bridge?.notifyChanged()
           return snapshot()
         },
         revokeDevice: async (id) => {
           if (bridge) bridge.revokeDevice(id)
           else devices.revoke(id)
           return snapshot()
+        },
+        createDevice: async (name) => {
+          const result = devices.create(String(name || "TUI"))
+          return { token: result.token, id: result.device.id }
         },
         pair: async () => pair(),
       })
@@ -2695,13 +3499,20 @@ const __modules = {
   "gui/index.js": function (module, exports, require) {
     "use strict"
     
-    const { Plugin } = require("@opencode/plugin/gui")
+    const { Plugin, Store } = require("@opencode/plugin/gui")
+    const { Schema } = require("effect")
     const { setup } = require("@b/gui/renderer.js")
     const main = require("@b/gui/main.js")
     const en = require("@b/gui/strings.js")
     
     module.exports = {
       default: Plugin.define({
+        stores: {
+          web: Store.global(Schema.Struct({ url: Schema.String, token: Schema.String }), {
+            url: "http://127.0.0.1:47821",
+            token: "",
+          }),
+        },
         i18n: { en },
         setup,
         main,

@@ -33,4 +33,8 @@ function errorMessage(error) {
   return error instanceof Error ? error.message : String(error)
 }
 
-module.exports = { randomId, sha256, joinPath, parseUrl, truncate, errorMessage }
+function basicAuth(password) {
+  return `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`
+}
+
+module.exports = { randomId, sha256, joinPath, parseUrl, truncate, errorMessage, basicAuth }

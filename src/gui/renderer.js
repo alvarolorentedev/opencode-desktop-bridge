@@ -12,7 +12,7 @@ function isLoopback(host) {
 }
 
 function setup(ctx) {
-  if (!ctx.desktop) return
+  if (!ctx.desktop) return setupWeb(ctx)
   ctx.add(Style, css)
 
   const ipc = ctx.main(BridgeIpc)
@@ -127,9 +127,11 @@ function renderPage(ctx, ipc, t) {
   const devicesBox = el("div", { class: "odb-list" })
   const pairBox = el("div", { class: "odb-card" })
   const diagBox = el("div", { class: "odb-list" })
+  const tuiWebBox = el("div", { class: "odb-list" })
 
   let snapshot
   let pairing
+  let tuiToken
 
   function showError(error) {
     errorBox.textContent = error instanceof Error ? error.message : String(error || "")
@@ -170,7 +172,7 @@ function renderPage(ctx, ipc, t) {
       const label = el("label", { class: "odb-item" }, [
         checkbox,
         el("span", { class: "odb-item-name" }, server.name),
-        el("span", { class: "odb-muted" }, server.id === "sidecar" ? "desktop" : server.connected ? "" : "offline"),
+        el("span", { class: "odb-muted" }, server.source && server.source !== "desktop" ? server.source : server.id === "sidecar" ? "desktop" : server.connected ? "" : "offline"),
       ])
       const actions = el("div", { class: "odb-actions" }, [])
       if (server.configServer) {
@@ -249,6 +251,64 @@ function renderPage(ctx, ipc, t) {
     pairBox.append(pair, el("div", { class: "odb-actions" }, [copyCommand]), manual, hint)
   }
 
+  function renderTuiWeb(snap) {
+    clear(tuiWebBox)
+    const base = snap.status.baseUrl || snap.status.addresses[0] || ""
+    const admin = el("input", { class: "odb-input", value: snap.adminToken || "", readonly: "readonly", spellcheck: "false" })
+    const copyAdmin = el("button", { class: "odb-button" }, t("copy"))
+    copyAdmin.onclick = () => copy(snap.adminToken || "", copyAdmin)
+    tuiWebBox.append(
+      el("div", { class: "odb-row" }, [
+        el("div", { class: "odb-row-copy" }, [
+          el("div", { class: "odb-row-title" }, t("adminToken")),
+          el("div", { class: "odb-muted" }, t("adminTokenHint")),
+        ]),
+        el("div", { class: "odb-actions" }, [admin, copyAdmin]),
+      ]),
+    )
+    if (tuiToken) {
+      const token = el("div", { class: "odb-code" }, tuiToken)
+      const command = el("div", { class: "odb-code" }, `OPENCODE_PASSWORD=${tuiToken} opencode --server ${base}`)
+      const copyToken = el("button", { class: "odb-button" }, t("copy"))
+      copyToken.onclick = () => copy(tuiToken, copyToken)
+      const copyCommand = el("button", { class: "odb-button" }, t("copy"))
+      copyCommand.onclick = () => copy(`OPENCODE_PASSWORD=${tuiToken} opencode --server ${base}`, copyCommand)
+      tuiWebBox.append(
+        el("div", { class: "odb-row" }, [
+          el("div", { class: "odb-row-copy" }, [
+            el("div", { class: "odb-row-title" }, t("tuiToken")),
+            el("div", { class: "odb-muted" }, t("tuiTokenHint")),
+          ]),
+        ]),
+        token,
+        el("div", { class: "odb-actions" }, [copyToken]),
+        command,
+        el("div", { class: "odb-actions" }, [copyCommand]),
+      )
+    } else {
+      const create = el("button", { class: "odb-button" }, t("createTuiToken"))
+      create.onclick = async () => {
+        try {
+          const result = await ipc.createDevice("TUI")
+          tuiToken = result.token
+          renderTuiWeb(snapshot)
+        } catch (error) {
+          showError(error)
+        }
+      }
+      tuiWebBox.append(
+        el("div", { class: "odb-row" }, [
+          el("div", { class: "odb-row-copy" }, [
+            el("div", { class: "odb-row-title" }, t("tuiToken")),
+            el("div", { class: "odb-muted" }, t("tuiTokenHint")),
+          ]),
+          create,
+        ]),
+      )
+    }
+    tuiWebBox.append(el("div", { class: "odb-muted" }, t("webHint")))
+  }
+
   function renderDiagnostics(snap) {
     clear(diagBox)
     const line = (title, value) =>
@@ -291,6 +351,7 @@ function renderPage(ctx, ipc, t) {
     if (pairing && pairing.expiresAt < Date.now()) pairing = undefined
     renderPairing(snap)
     renderDiagnostics(snap)
+    renderTuiWeb(snap)
     if (!snap.config.enabled) pairing = undefined
   }
 
@@ -345,6 +406,7 @@ function renderPage(ctx, ipc, t) {
     ]),
     section(t("servers"), [row(t("servers"), t("serversHint"), serversBox)]),
     section(t("pairing"), [row(t("pairing"), t("pairingHint"), pairBox)]),
+    section(t("tuiWeb"), [row(t("tuiWeb"), t("tuiWebHint"), tuiWebBox)]),
     section(t("devices"), [row(t("devices"), null, devicesBox)]),
     section(t("diagnostics"), [row(t("diagnostics"), null, diagBox)]),
     errorBox,
@@ -372,4 +434,246 @@ function renderPage(ctx, ipc, t) {
   return page
 }
 
-module.exports = { setup, renderPage }
+function translate(ctx, key) {
+  try {
+    const value = ctx.t(key)
+    return value === key ? strings[key] || key : value
+  } catch {
+    return strings[key] || key
+  }
+}
+
+function copyValue(value, button, copied) {
+  if (!navigator.clipboard || !navigator.clipboard.writeText) return
+  void navigator.clipboard.writeText(value).then(() => {
+    const previous = button.textContent
+    button.textContent = copied
+    setTimeout(() => (button.textContent = previous), 1200)
+  })
+}
+
+function webRow(ctx, title, description, control) {
+  if (ctx.ui && typeof ctx.ui.SettingsRow === "function") {
+    try {
+      return createComponent(ctx.ui.SettingsRow, { title: title || "", description: description || undefined, children: control })
+    } catch {
+      // Fall through to the plain row.
+    }
+  }
+  return el("div", { class: "odb-row" }, [
+    el("div", { class: "odb-row-copy" }, [
+      title ? el("div", { class: "odb-row-title" }, title) : null,
+      description ? el("div", { class: "odb-muted" }, description) : null,
+    ]),
+    control,
+  ])
+}
+
+function webSection(ctx, title, rows) {
+  if (ctx.ui && typeof ctx.ui.SettingsSection === "function") {
+    try {
+      return createComponent(ctx.ui.SettingsSection, { title, children: rows })
+    } catch {
+      // Fall through to the plain section.
+    }
+  }
+  return el("div", { class: "odb" }, [title ? el("div", { class: "odb-tag" }, title) : null, ...rows])
+}
+
+function setupWeb(ctx) {
+  ctx.add(Style, css)
+  const t = (key) => translate(ctx, key)
+  const page = renderWebPage(ctx)
+  ctx.add(SettingsPage, {
+    id: "desktop-bridge-web",
+    get title() {
+      return t("title")
+    },
+    render: () => page,
+  })
+  ctx.add(Command, {
+    id: "open-web",
+    get title() {
+      return t("open")
+    },
+    get group() {
+      return t("commandGroup")
+    },
+    run: () => {
+      if (ctx.layout && typeof ctx.layout.settings === "function") ctx.layout.settings("desktop-bridge-web")
+    },
+  })
+}
+
+function renderWebPage(ctx) {
+  const t = (key) => translate(ctx, key)
+  const store = ctx.stores && ctx.stores.web
+  const initial = store && store.value ? store.value : { url: "http://127.0.0.1:47821", token: "" }
+
+  const url = el("input", { class: "odb-input", value: initial.url, spellcheck: "false" })
+  const token = el("input", { class: "odb-input", value: initial.token, spellcheck: "false" })
+  const listBox = el("div", { class: "odb-list" })
+  const output = el("div", { class: "odb-card" })
+  const errorBox = el("div", { class: "odb-error" })
+
+  function base() {
+    return (url.value.trim() || "http://127.0.0.1:47821").replace(/\/+$/, "")
+  }
+
+  function adminToken() {
+    return token.value.trim()
+  }
+
+  function remember() {
+    if (!store || typeof store.update !== "function") return
+    const nextUrl = url.value.trim()
+    const nextToken = token.value.trim()
+    store.update((draft) => {
+      draft.url = nextUrl
+      draft.token = nextToken
+    })
+  }
+
+  url.onchange = remember
+  token.onchange = remember
+
+  function showError(error) {
+    errorBox.textContent = error instanceof Error ? error.message : String(error || "")
+  }
+
+  function normalize(value) {
+    try {
+      const parsed = new URL(value)
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined
+      if (parsed.username || parsed.password) return undefined
+      return parsed.href.replace(/\/+$/, "")
+    } catch {
+      return undefined
+    }
+  }
+
+  function collect() {
+    const bridge = normalize(base())
+    const result = []
+    if (!ctx.servers || typeof ctx.servers.list !== "function" || typeof ctx.servers.get !== "function") return result
+    for (const id of ctx.servers.list()) {
+      const server = ctx.servers.get(id)
+      if (!server || !server.url) continue
+      const address = normalize(server.url)
+      if (!address || address === bridge) continue
+      if (/^https?:\/\/127\.0\.0\.1:0$/.test(address)) continue
+      result.push({ name: server.name || address, url: address, password: server.password || "" })
+    }
+    return result
+  }
+
+  function renderList() {
+    clear(listBox)
+    const servers = collect()
+    if (!servers.length) {
+      listBox.append(el("div", { class: "odb-muted" }, t("noServers")))
+      return
+    }
+    for (const server of servers) {
+      listBox.append(
+        el("div", { class: "odb-row" }, [
+          el("div", { class: "odb-row-copy" }, [
+            el("div", { class: "odb-row-title" }, server.name),
+            el("div", { class: "odb-muted" }, server.url),
+          ]),
+        ]),
+      )
+    }
+  }
+
+  async function api(path, options = {}) {
+    const value = adminToken()
+    if (!value) throw new Error(t("adminTokenMissing"))
+    const headers = { ...(options.headers || {}), authorization: `Bearer ${value}` }
+    if (options.body !== undefined) headers["content-type"] = "application/json"
+    const response = await fetch(`${base()}/bridge/v1/admin${path}`, { ...options, headers })
+    const body = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(body && body.message ? body.message : `Request failed (${response.status})`)
+    return body
+  }
+
+  function showLink(link) {
+    clear(output)
+    const code = el("div", { class: "odb-code" }, link)
+    const copy = el("button", { class: "odb-button" }, t("copy"))
+    copy.onclick = () => copyValue(link, copy, t("copied"))
+    output.append(code, el("div", { class: "odb-actions" }, [copy]))
+  }
+
+  const sync = el("button", { class: "odb-button" }, t("syncServers"))
+  sync.onclick = async () => {
+    errorBox.textContent = ""
+    try {
+      remember()
+      const servers = collect()
+      const result = await api("/servers/web", { method: "PUT", body: JSON.stringify({ servers }) })
+      clear(output)
+      output.append(
+        el("div", { class: "odb-muted" }, t("syncDone").replace("{count}", String(result.data.length))),
+      )
+      renderList()
+    } catch (error) {
+      showError(error)
+    }
+  }
+
+  const pair = el("button", { class: "odb-button" }, t("pair"))
+  pair.onclick = async () => {
+    errorBox.textContent = ""
+    try {
+      remember()
+      const result = await api("/pair", { method: "POST" })
+      showLink(result.link)
+    } catch (error) {
+      showError(error)
+    }
+  }
+
+  const status = el("button", { class: "odb-button" }, t("refreshStatus"))
+  status.onclick = async () => {
+    errorBox.textContent = ""
+    try {
+      remember()
+      const result = await api("/status")
+      clear(output)
+      output.append(
+        el("div", { class: "odb-muted" }, `${result.baseUrl || base()} · ${result.sources.map((source) => `${source.name}: ${source.count}`).join(" · ")}`),
+      )
+      renderList()
+    } catch (error) {
+      showError(error)
+    }
+  }
+
+  const root = el("div", { class: "odb" }, [
+    webSection(ctx, t("webTitle"), [
+      webRow(ctx, t("bridgeUrl"), t("webUrlHint"), url),
+      webRow(ctx, t("adminToken"), t("webTokenHint"), token),
+      webRow(ctx, t("webServers"), t("webServersHint"), listBox),
+      webRow(ctx, null, null, el("div", { class: "odb-actions" }, [sync, pair, status])),
+    ]),
+    output,
+    errorBox,
+  ])
+
+  renderList()
+  if (ctx.ui && typeof ctx.ui.SettingsLayout === "function") {
+    try {
+      return createComponent(ctx.ui.SettingsLayout, {
+        title: t("title"),
+        description: t("webPageDescription"),
+        children: root,
+      })
+    } catch {
+      return root
+    }
+  }
+  return root
+}
+
+module.exports = { setup, setupWeb, renderPage, renderWebPage }

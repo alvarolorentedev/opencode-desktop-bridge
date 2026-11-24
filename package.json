@@ -1,16 +1,18 @@
 {
   "name": "opencode-desktop-bridge",
   "version": "0.1.0",
-  "description": "One virtual OpenCode server for every server configured in OpenCode Desktop.",
+  "description": "One virtual OpenCode server for every server configured in OpenCode Desktop, the TUI or the web.",
   "license": "Apache-2.0",
   "files": [
     "dist",
     "docs",
+    "src/tui.ts",
     "README.md",
     "LICENSE"
   ],
   "exports": {
-    "./gui-experimental": "./dist/gui-experimental.cjs"
+    "./gui-experimental": "./dist/gui-experimental.cjs",
+    "./tui": "./src/tui.ts"
   },
   "scripts": {
     "build": "node scripts/build.mjs",

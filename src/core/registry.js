@@ -1,5 +1,7 @@
 "use strict"
 
+// Desktop discovery only. The catalog decides exposure, the configuration
+// server and deduplication across Desktop, TUI and web sources.
 function createServerRegistry(options) {
   const getConfig = options.getConfig
   const setConfig = options.setConfig
@@ -47,44 +49,21 @@ function createServerRegistry(options) {
     })
   }
 
-  function exposed() {
-    const config = getConfig()
-    const hidden = new Set(config.hiddenServers || [])
-    return servers().filter((item) => !hidden.has(item.id))
-  }
-
-  function configServer() {
-    const config = getConfig()
-    const visible = exposed()
-    const preferred = visible.find((item) => item.id === config.configServer)
-    if (preferred) return preferred.id
-    return visible[0] ? visible[0].id : undefined
-  }
-
   function setHidden(ids) {
     const config = getConfig()
     const next = [...new Set((Array.isArray(ids) ? ids : []).filter((id) => typeof id === "string" && id))]
     setConfig({ ...config, hiddenServers: next })
-    changed()
   }
 
   function setConfigServer(id) {
     const config = getConfig()
     setConfig({ ...config, configServer: id })
-    changed()
   }
 
   function signature() {
-    const selected = (() => {
-      try {
-        return configServer() || ""
-      } catch {
-        return ""
-      }
-    })()
-    return `${selected}|${exposed()
-      .map((item) => `${item.id}:${item.name}:${item.connected ? 1 : 0}`)
-      .join("|")}`
+    return servers()
+      .map((item) => `${item.id}:${item.name}:${item.connected ? 1 : 0}:${item.builtin ? 1 : 0}:${item.local ? 1 : 0}`)
+      .join("|")
   }
 
   function changed() {
@@ -94,18 +73,7 @@ function createServerRegistry(options) {
     onChange()
   }
 
-  function snapshot() {
-    const config = getConfig()
-    const hidden = new Set(config.hiddenServers || [])
-    const selected = configServer()
-    return servers().map((item) => ({
-      ...item,
-      exposed: !hidden.has(item.id),
-      configServer: item.id === selected,
-    }))
-  }
-
-  return { report, forget, servers, exposed, configServer, setHidden, setConfigServer, snapshot }
+  return { report, forget, servers, setHidden, setConfigServer }
 }
 
 module.exports = { createServerRegistry }

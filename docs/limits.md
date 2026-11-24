@@ -33,9 +33,19 @@ Keep the bridge connection’s `directory` empty. The pairing flow does. A non-e
 
 Some endpoints are not part of the core session surface (for example experimental APIs and provider OAuth callbacks). They go to the configuration server, unless they carry a `directory` or `location[directory]` query, in which case they go to that directory’s server. If a feature exists only on another server, it is not reachable through that route.
 
+## Sources
+
+- Desktop is the live source. TUI and web entries are stored in the bridge and survive restarts.
+- Duplicate URLs collapse to one target; Desktop wins over TUI and web entries.
+- TUI and web entries have no health check. An offline server fails per request and stays in the list.
+- The TUI `/bridge` command only edits the bridge. The TUI must still connect with `--server` to see the merged view.
+- The web app's server list is browser-local. Syncing writes a copy into the bridge; it does not make the browser's list shared by itself. The bridge uses the URLs as the browser sees them, so make sure they are reachable from the Desktop host (`localhost` means the browser's machine). A copied credential that expires must be re-synced.
+- TUI and web clients send upstream passwords to the bridge. The admin token is a bearer credential. Use a loopback bridge or HTTPS.
+
 ## Protocols
 
 - Upstream servers must speak OpenCode v2. v1 servers cannot be exposed.
+- TUI and web manual sources authenticate with HTTP Basic (`opencode:<password>`). Servers that require OIDC, custom headers or client certificates must be configured in Desktop instead.
 - Upstream servers using OIDC cannot be exposed: plugin main receives Basic/sidecar credentials only. The same applies to custom gateway headers and per-server certificates configured in Desktop’s connection form.
 - Upstream HTTPS certificates must be trusted by the desktop process. Desktop’s per-server certificate overrides are not available to plugin main.
 
@@ -48,7 +58,7 @@ Some endpoints are not part of the core session surface (for example experimenta
 
 ## Runtime
 
-- Browser clients: the bridge does not enable CORS and browser WebSockets cannot attach the device token header. Native clients (including OpenCode Mobile) work; the mobile web build and arbitrary browser pages do not.
+- Browser clients: the data plane does not enable CORS and browser WebSockets cannot attach the device token header. Native clients (including OpenCode Mobile) work; the mobile web build and arbitrary browser pages do not. The web app's Desktop Bridge settings page only calls the admin control API, which does allow CORS.
 - The bridge runs only while Desktop runs. If every Desktop window is closed, only the sidecar is known first-hand; other servers become unavailable until a window reports them again.
 - The listener uses one fixed port. If the port is taken, the bridge reports an error instead of moving, because mobile profiles store the URL.
 - TLS is terminated outside the bridge.

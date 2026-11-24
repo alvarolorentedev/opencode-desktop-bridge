@@ -30,7 +30,7 @@ test("the plugin main entry starts, pairs through the native sidecar, and stops"
   const schema = new Proxy(function schema() {}, { get: () => () => undefined })
   const provide = (name) => {
     if (name === "@opencode/plugin/gui") {
-      return { Plugin: { define: (value) => value }, Ipc: { define: (value) => value } }
+      return { Plugin: { define: (value) => value }, Ipc: { define: (value) => value }, Store: { global: (_schema, initial) => initial } }
     }
     if (name === "effect") return { Schema: schema }
     if (name === "solid-js") {
@@ -44,6 +44,8 @@ test("the plugin main entry starts, pairs through the native sidecar, and stops"
 
   const upstream = createUpstream("a")
   const upstreamPort = await listen(upstream.server)
+  const upstreamB = createUpstream("b")
+  const upstreamBPort = await listen(upstreamB.server)
   const probe = net.createServer()
   const probePort = await listen(probe)
   await close(probe)
@@ -55,10 +57,13 @@ test("the plugin main entry starts, pairs through the native sidecar, and stops"
     },
   }
   const deviceStore = { value: [], set(value) { this.value = value } }
+  const sourcesStore = { value: { tui: [], web: [] }, set(value) { this.value = value } }
+  const adminStore = { value: { token: "adm_test" }, set(value) { this.value = value } }
+  const stores = { config: configStore, devices: deviceStore, sources: sourcesStore, admin: adminStore }
   const cleanups = []
   let provided
   const ctx = {
-    storage: { store: (key) => (key === "config" ? configStore : deviceStore) },
+    storage: { store: (key) => stores[key] },
     serverEndpoints: {
       get: (id) =>
         id === "sidecar" || id === "a"
@@ -76,6 +81,7 @@ test("the plugin main entry starts, pairs through the native sidecar, and stops"
   t.after(async () => {
     for (const cleanup of cleanups) await cleanup()
     await close(upstream.server)
+    await close(upstreamB.server)
   })
 
   definition.main(ctx)
@@ -86,7 +92,32 @@ test("the plugin main entry starts, pairs through the native sidecar, and stops"
   const before = await provided.snapshot()
   assert.equal(before.status.port, probePort)
   assert.equal(before.servers[0].exposed, true)
+  assert.equal(before.servers[0].source, "desktop")
   assert.equal(before.sidecarReady, true)
+  assert.equal(before.adminToken, "adm_test")
+
+  const admin = { authorization: "Bearer adm_test" }
+  const denied = await request(probePort, "/bridge/v1/admin/status")
+  assert.equal(denied.status, 401)
+  const preflight = await request(probePort, "/bridge/v1/admin/status", {
+    method: "OPTIONS",
+    headers: { origin: "http://localhost:49374", "access-control-request-method": "GET" },
+  })
+  assert.equal(preflight.status, 204)
+  assert.equal(preflight.headers["access-control-allow-origin"], "http://localhost:49374")
+
+  const added = await request(probePort, "/bridge/v1/admin/servers/tui", {
+    method: "PUT",
+    headers: admin,
+    body: JSON.stringify({ servers: [{ name: "B", url: `http://127.0.0.1:${upstreamBPort}`, password: "secret" }] }),
+  })
+  assert.equal(added.status, 200)
+  assert.equal(added.body.data.length, 1)
+  assert.equal(added.body.data[0].hasPassword, true)
+
+  const controlStatus = await request(probePort, "/bridge/v1/admin/status", { headers: admin })
+  assert.equal(controlStatus.status, 200)
+  assert.equal(controlStatus.body.sources.find((source) => source.id === "tui").count, 1)
 
   const pairing = await provided.pair()
   assert.match(pairing.link, new RegExp(`http://127\\.0\\.0\\.1:${probePort}/auth/connect/code-a$`))
@@ -109,10 +140,29 @@ test("the plugin main entry starts, pairs through the native sidecar, and stops"
   assert.equal(issued.body.code, "code-a")
   assert.equal(issued.body.expires_in, 300)
 
+  const projects = await request(probePort, "/api/project", { headers: { authorization: basic(redeemed.body.token) } })
+  assert.equal(projects.status, 200)
+  assert.deepEqual(projects.body.map((project) => project.id).sort(), ["pa", "pb"])
+
+  const tui = await provided.createDevice("TUI")
+  assert.match(tui.token, /^brg1_/)
+  const tuiInfo = await request(probePort, "/api/info", { headers: { authorization: basic(tui.token) } })
+  assert.equal(tuiInfo.status, 200)
+
+  const removed = await request(probePort, `/bridge/v1/admin/servers/tui/${encodeURIComponent(added.body.data[0].id)}`, {
+    method: "DELETE",
+    headers: admin,
+  })
+  assert.equal(removed.status, 200)
+  assert.equal(removed.body.data.length, 0)
+  const projectsAfter = await request(probePort, "/api/project", { headers: { authorization: basic(redeemed.body.token) } })
+  assert.deepEqual(projectsAfter.body.map((project) => project.id), ["pa"])
+
   const devices = await provided.snapshot()
-  assert.equal(devices.devices.length, 1)
-  const revoked = await provided.revokeDevice(devices.devices[0].id)
-  assert.equal(revoked.devices.length, 0)
+  assert.equal(devices.devices.length, 2)
+  for (const device of devices.devices) await provided.revokeDevice(device.id)
+  const after = await provided.snapshot()
+  assert.equal(after.devices.length, 0)
   const rejected = await request(probePort, "/api/info", { headers: { authorization: basic(redeemed.body.token) } })
   assert.equal(rejected.status, 401)
 

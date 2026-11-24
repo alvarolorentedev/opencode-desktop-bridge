@@ -21,6 +21,7 @@ A connector would expose **the bridge origin**, not each OpenCode server. All au
 4. **No per-server endpoints.** Do not create one public endpoint per upstream server; that would leak the topology and multiply attack surface.
 5. **Control plane unchanged.** Pairing for Cloud Link remains its existing device flow. Bridge pairing remains the native `opencode pair` redemption described in the architecture doc.
 6. **Revocation.** Revoking the bridge device must close its streams; revoking the Cloud Link device must stop the tunnel. Both are independent and immediate.
+7. **Admin control plane.** `/bridge/v1/admin/*` is on the same origin and is protected only by the bridge admin token. If remote catalog changes are not wanted, block that prefix at the connector and keep the admin token on the local machine.
 
 ## Migration
 
