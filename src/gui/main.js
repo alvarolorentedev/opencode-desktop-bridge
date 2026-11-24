@@ -18,7 +18,7 @@ const { DEFAULT_CONFIG } = require("../core/config.js")
 const { requestJson } = require("../core/http.js")
 const { basicAuth, errorMessage, randomId } = require("../core/util.js")
 
-const VERSION = "0.2.0"
+const VERSION = "0.2.1"
 const RPC_ID = "desktop-bridge.remote"
 const REMOTE_TIMEOUT = 180000
 

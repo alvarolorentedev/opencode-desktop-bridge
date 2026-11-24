@@ -9,7 +9,7 @@ const path = require("node:path")
 test("the built GUI bundle evaluates with the host's provided modules", () => {
   execFileSync(process.execPath, [path.join("scripts", "build.mjs")], { cwd: path.join(__dirname, "..") })
   const code = readFileSync(path.join(__dirname, "..", "dist", "gui-experimental.cjs"), "utf8")
-  const schema = new Proxy(function schema() {}, { get: () => () => undefined })
+  const schema = require("./schema.js")
   const provide = (name) => {
     if (name === "@opencode/plugin/gui") {
       return {

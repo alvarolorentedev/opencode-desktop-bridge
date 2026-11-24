@@ -85,7 +85,7 @@ const Pairing = Schema.Struct({
 })
 
 const PairInput = Schema.Struct({
-  mode: Schema.Union(Schema.Literal("remote"), Schema.Literal("local")),
+  mode: Schema.Union([Schema.Literal("remote"), Schema.Literal("local")]),
 })
 
 const Token = Schema.Struct({

@@ -89,7 +89,7 @@ const __modules = {
     })
     
     const PairInput = Schema.Struct({
-      mode: Schema.Union(Schema.Literal("remote"), Schema.Literal("local")),
+      mode: Schema.Union([Schema.Literal("remote"), Schema.Literal("local")]),
     })
     
     const Token = Schema.Struct({
@@ -3352,7 +3352,7 @@ const __modules = {
     const { requestJson } = require("@b/core/http.js")
     const { basicAuth, errorMessage, randomId } = require("@b/core/util.js")
     
-    const VERSION = "0.2.0"
+    const VERSION = "0.2.1"
     const RPC_ID = "desktop-bridge.remote"
     const REMOTE_TIMEOUT = 180000
     

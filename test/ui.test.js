@@ -74,7 +74,7 @@ test("the settings page renders against the desktop UI contract", async () => {
   try {
     execFileSync(process.execPath, [path.join("scripts", "build.mjs")], { cwd: path.join(__dirname, "..") })
     const code = readFileSync(path.join(__dirname, "..", "dist", "gui-experimental.cjs"), "utf8")
-    const schema = new Proxy(function schema() {}, { get: () => () => undefined })
+    const schema = require("./schema.js")
     const contributions = []
     const token = { SettingsPage: "SettingsPage", Command: "Command", Style: "Style" }
     const provide = (name) => {
@@ -200,7 +200,7 @@ test("the web settings page renders and syncs this browser's servers", async () 
   try {
     execFileSync(process.execPath, [path.join("scripts", "build.mjs")], { cwd: path.join(__dirname, "..") })
     const code = readFileSync(path.join(__dirname, "..", "dist", "gui-experimental.cjs"), "utf8")
-    const schema = new Proxy(function schema() {}, { get: () => () => undefined })
+    const schema = require("./schema.js")
     const contributions = []
     const token = { SettingsPage: "SettingsPage", Command: "Command", Style: "Style" }
     const provide = (name) => {

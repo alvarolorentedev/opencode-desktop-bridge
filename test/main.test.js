@@ -27,7 +27,7 @@ function waitFor(predicate, timeout = 5000) {
 test("the plugin main entry starts, pairs through the native sidecar, and stops", async (t) => {
   execFileSync(process.execPath, [path.join("scripts", "build.mjs")], { cwd: path.join(__dirname, "..") })
   const code = readFileSync(path.join(__dirname, "..", "dist", "gui-experimental.cjs"), "utf8")
-  const schema = new Proxy(function schema() {}, { get: () => () => undefined })
+  const schema = require("./schema.js")
   const provide = (name) => {
     if (name === "@opencode/plugin/gui") {
       return { Plugin: { define: (value) => value }, Ipc: { define: (value) => value }, Store: { global: (_schema, initial) => initial } }
