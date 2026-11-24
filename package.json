@@ -1,0 +1,24 @@
+{
+  "name": "opencode-desktop-bridge",
+  "version": "0.1.0",
+  "description": "One virtual OpenCode server for every server configured in OpenCode Desktop.",
+  "license": "Apache-2.0",
+  "files": [
+    "dist",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    "./gui-experimental": "./dist/gui-experimental.cjs"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test test/",
+    "check": "node scripts/build.mjs && node --test test/",
+    "prepublishOnly": "node scripts/build.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

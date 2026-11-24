@@ -1,0 +1,121 @@
+"use strict"
+
+const test = require("node:test")
+const assert = require("node:assert/strict")
+const { execFileSync } = require("node:child_process")
+const { readFileSync } = require("node:fs")
+const net = require("node:net")
+const path = require("node:path")
+const { listen, close, createUpstream, request, basic } = require("./helpers.js")
+
+function waitFor(predicate, timeout = 5000) {
+  return new Promise((resolve, reject) => {
+    const started = Date.now()
+    const tick = async () => {
+      try {
+        if (await predicate()) return resolve()
+      } catch {
+        // Retry while startup settles.
+      }
+      if (Date.now() - started > timeout) return reject(new Error("Timed out waiting for condition"))
+      setTimeout(tick, 25)
+    }
+    tick()
+  })
+}
+
+test("the plugin main entry starts, pairs through the native sidecar, and stops", async (t) => {
+  execFileSync(process.execPath, [path.join("scripts", "build.mjs")], { cwd: path.join(__dirname, "..") })
+  const code = readFileSync(path.join(__dirname, "..", "dist", "gui-experimental.cjs"), "utf8")
+  const schema = new Proxy(function schema() {}, { get: () => () => undefined })
+  const provide = (name) => {
+    if (name === "@opencode/plugin/gui") {
+      return { Plugin: { define: (value) => value }, Ipc: { define: (value) => value } }
+    }
+    if (name === "effect") return { Schema: schema }
+    if (name === "solid-js") {
+      return { createComponent: () => undefined, createEffect: () => {}, onCleanup: () => {} }
+    }
+    return require(name)
+  }
+  const module = { exports: {} }
+  new Function("require", "module", "exports", code)(provide, module, module.exports)
+  const definition = module.exports.default || module.exports
+
+  const upstream = createUpstream("a")
+  const upstreamPort = await listen(upstream.server)
+  const probe = net.createServer()
+  const probePort = await listen(probe)
+  await close(probe)
+
+  const configStore = {
+    value: { enabled: true, host: "127.0.0.1", port: probePort, publicUrl: "", hiddenServers: [], configServer: "sidecar" },
+    set(value) {
+      this.value = value
+    },
+  }
+  const deviceStore = { value: [], set(value) { this.value = value } }
+  const cleanups = []
+  let provided
+  const ctx = {
+    storage: { store: (key) => (key === "config" ? configStore : deviceStore) },
+    serverEndpoints: {
+      get: (id) =>
+        id === "sidecar" || id === "a"
+          ? { url: `http://127.0.0.1:${upstreamPort}`, headers: { authorization: "Basic dXBzdHJlYW0=" } }
+          : undefined,
+    },
+    app: { version: "2.4.1" },
+    log: { write: () => {} },
+    windows: { on: () => () => {} },
+    onCleanup: (fn) => cleanups.push(fn),
+    provide: (_token, impl) => {
+      provided = impl
+    },
+  }
+  t.after(async () => {
+    for (const cleanup of cleanups) await cleanup()
+    await close(upstream.server)
+  })
+
+  definition.main(ctx)
+  await waitFor(async () => (await provided.snapshot()).status.state === "running")
+
+  provided.reportServers([{ id: "a", name: "A", connected: true, builtin: false, local: false }], { window: 1 })
+  await waitFor(async () => (await provided.snapshot()).servers.length === 1)
+  const before = await provided.snapshot()
+  assert.equal(before.status.port, probePort)
+  assert.equal(before.servers[0].exposed, true)
+  assert.equal(before.sidecarReady, true)
+
+  const pairing = await provided.pair()
+  assert.match(pairing.link, new RegExp(`http://127\\.0\\.0\\.1:${probePort}/auth/connect/code-a$`))
+  assert.equal(pairing.command, `opencode pair --url http://127.0.0.1:${probePort}`)
+
+  const redeemed = await request(probePort, "/auth/connect/code-a")
+  assert.equal(redeemed.status, 200)
+  assert.match(redeemed.body.token, /^brg1_/)
+
+  const info = await request(probePort, "/api/info", { headers: { authorization: basic(redeemed.body.token) } })
+  assert.equal(info.status, 200)
+  assert.equal(info.body.version, "2.4.1")
+  assert.deepEqual(info.body.urls, [`http://127.0.0.1:${probePort}`])
+
+  const issued = await request(probePort, "/api/pair", {
+    method: "POST",
+    headers: { authorization: basic(redeemed.body.token) },
+  })
+  assert.equal(issued.status, 200)
+  assert.equal(issued.body.code, "code-a")
+  assert.equal(issued.body.expires_in, 300)
+
+  const devices = await provided.snapshot()
+  assert.equal(devices.devices.length, 1)
+  const revoked = await provided.revokeDevice(devices.devices[0].id)
+  assert.equal(revoked.devices.length, 0)
+  const rejected = await request(probePort, "/api/info", { headers: { authorization: basic(redeemed.body.token) } })
+  assert.equal(rejected.status, 401)
+
+  const off = await provided.setEnabled(false)
+  assert.equal(off.status.state, "off")
+})
