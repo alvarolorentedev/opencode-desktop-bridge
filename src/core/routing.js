@@ -100,6 +100,9 @@ function classify(method, pathname, searchParams) {
   const saved = SAVED_PERMISSION_ROUTE.exec(pathname)
   if (saved) return { kind: "saved-permission", id: decode(saved[1]) }
 
+  if (pathname === "/api/fs/list") {
+    return { kind: "fs-list", directory: directoryFromQuery(searchParams), path: queryValue(searchParams, "path") }
+  }
   if (pathname.startsWith("/api/fs/") || pathname.startsWith("/api/experimental/fs/")) {
     return { kind: "directory", directory: directoryFromQuery(searchParams) }
   }

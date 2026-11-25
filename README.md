@@ -79,12 +79,14 @@ If the bridge is mounted under a path prefix (for example `https://host/bridge`)
 One normal OpenCode v2 server:
 
 - projects and sessions from every exposed server, merged;
+- with more than one exposed server, project names and chat titles are prefixed with the owning server (`Studio · billing`), so the phone can tell them apart;
+- the add-project folder browser browses every exposed server: `/` lists the servers as `@Studio` folders, and `@Studio/…` browses that machine;
 - messages, prompts, streaming, permissions, questions, todos and diffs, routed to the owning server;
 - terminals and WebSockets, tunneled to the owning server;
 - files, VCS and worktrees for the project on screen;
 - models, agents, commands and MCP configuration from the **configuration server** (Desktop’s own server by default).
 
-Sessions keep their real IDs. Server identity does not leak: the phone never receives upstream URLs or credentials.
+Sessions keep their real IDs. Upstream URLs and credentials never reach the phone.
 
 Leave the bridge profile’s **working directory** empty. The pairing flow does; a non-empty directory scopes the shared project and session lists to that one project.
 
@@ -154,12 +156,17 @@ The single-server view is an aggregation, not a new OpenCode engine.
 - **The admin API is loopback-only.** The TUI and web settings pages must use `http://127.0.0.1:<port>`, not the tunnel URL.
 - **Global configuration comes from one server** (Desktop’s own by default). A session on another server may use a model or agent that the selected configuration server does not list. Existing sessions keep working with their current model; changing models or creating a session with an unsupported model can fail.
 - **Duplicate project paths** on two machines collapse into one project. New sessions and file operations for that path go to the configuration server.
+- **Server names are display-only.** With more than one server, project names and chat titles carry a `Server · ` prefix and the folder browser uses `@Server` roots; the real upstream names and titles are unchanged. Renaming a chat strips the prefix before it reaches the server.
+- **The folder browser starts in the active project.** Tap **Up** to `/` (or type `/`) to see the server folders; while browsing an absolute folder, the `@Server` entries are also listed so you can switch machines without going up.
+- **A real folder named `@Server` is shadowed** by the matching server root. Use **Enter path manually** to reach it.
+- **Windows server roots fall back to the server’s default location** when `/` cannot be listed; `@Server/…` browsing then stays inside that default folder.
 - **Duplicate server URLs** collapse in the catalog by URL. Desktop wins over TUI and web entries.
 - **TUI and web sources use Basic auth.** Manual servers authenticate with `opencode:<password>`. OIDC, custom gateway headers and per-server certificates must be configured in Desktop.
 - **TUI and web sources are manual** and have no health state; an offline manual server fails per request and does not disappear from the list.
 - **The web settings page is a configuration surface**, not a bridge client. The web app still talks to its own servers directly; the browser data-plane limits below remain.
 - **Removing a server looks like deletion**, not like “server offline”. The app has no per-server health state in this mode.
-- Sessions from different machines are distinguished only by their project path.
+- Sessions from different machines are distinguished by their project path, and with more than one exposed server the owning server name is prefixed to project names and chat titles.
+- A chat title renamed on the phone is written back without the bridge prefix. An upstream title update event may briefly show the unprefixed title until the next list.
 - Upstream servers must speak the v2 API. v1 servers, OIDC-protected servers, and connections that rely on custom gateway headers or per-server certificates cannot be exposed.
 - The bridge runs only while Desktop is running. Non-sidecar servers become known through a Desktop window.
 - Future API routes not handled explicitly are forwarded to the configuration server, or to the directory owner when the request carries a directory.

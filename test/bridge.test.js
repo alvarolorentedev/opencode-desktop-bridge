@@ -138,6 +138,49 @@ test("bridge aggregates, routes, pairs and survives registry changes", async (t)
   const createdMessage = await request(bridge.port, "/api/session/new-b/message", { headers: auth })
   assert.equal(createdMessage.body.data[0].owner, "b")
 
+  assert.deepEqual(projects.body.map((project) => project.name), ["A · Project a", "B · Project b"])
+  assert.equal(sessions.body.data[0].title, "A · a one")
+
+  const directorySessions = await request(bridge.port, "/api/session?location%5Bdirectory%5D=%2Fa", { headers: auth })
+  assert.equal(directorySessions.status, 200)
+  assert.equal(directorySessions.body.data[0].title, "A · a one")
+
+  const oneSession = await request(bridge.port, "/api/session/a-s1", { headers: auth })
+  assert.equal(oneSession.body.data.title, "A · a one")
+
+  const renamed = await request(bridge.port, "/api/session/a-s1", {
+    method: "PATCH",
+    headers: { ...auth, "content-type": "application/json" },
+    body: JSON.stringify({ title: "A · Renamed" }),
+  })
+  assert.equal(renamed.status, 200)
+  assert.equal(renamed.body.data.title, "A · Renamed")
+  assert.equal(upstreamA.sessions.get("a-s1").title, "Renamed")
+
+  const fsRoot = await request(bridge.port, "/api/fs/list?path=%2F", { headers: auth })
+  assert.deepEqual(fsRoot.body.data.map((entry) => entry.path), ["@A", "@B"])
+
+  const fsServerRoot = await request(bridge.port, "/api/fs/list?path=%2F%40B", { headers: auth })
+  assert.deepEqual(fsServerRoot.body.data.map((entry) => entry.path), ["b-child", "b.txt"])
+  assert.ok(upstreamB.calls.some((call) => call.path === "/api/fs/list" && call.search.includes("path=%2F")))
+
+  const fsDeep = await request(bridge.port, "/api/fs/list?path=%2F%40B%2Fopt", { headers: auth })
+  assert.deepEqual(fsDeep.body.data.map((entry) => entry.path), ["b-child", "b.txt"])
+  assert.ok(upstreamB.calls.some((call) => call.path === "/api/fs/list" && call.search.includes("path=%2Fopt")))
+
+  const fsReal = await request(bridge.port, "/api/fs/list?path=%2Fa", { headers: auth })
+  assert.deepEqual(fsReal.body.data.map((entry) => entry.path), ["a-child", "a.txt", "@A", "@B"])
+
+  const virtualLocation = await request(bridge.port, "/api/location?location%5Bdirectory%5D=%2F%40B%2Fopt", { headers: auth })
+  assert.equal(virtualLocation.status, 200)
+  assert.equal(virtualLocation.body.data.directory, "/opt")
+  const createdOpt = await request(bridge.port, "/api/session", {
+    method: "POST",
+    headers: { ...auth, "content-type": "application/json" },
+    body: JSON.stringify({ location: { directory: "/opt" } }),
+  })
+  assert.equal(createdOpt.body.data.id, "new-b")
+
   const active = await request(bridge.port, "/api/session/active", { headers: auth })
   assert.deepEqual(active.body, { data: { "a-s1": "busy", "b-s1": "busy" } })
 

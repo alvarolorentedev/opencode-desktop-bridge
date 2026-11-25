@@ -107,17 +107,18 @@ Using the sidecar code as proof means the native pairing service remains the aut
 | `POST /api/pair` | Relay to Desktop’s pairing service for authenticated clients; the bridge never mints codes. |
 | `GET /api/info`, `/api/health` | Synthetic. Upstream `pid`, `hostname`, `urls` and temp paths are removed. |
 | `GET /api/event` | One upstream event stream per exposed server per client, merged and forwarded byte-for-byte. |
-| `GET /api/project` | Aggregate, dedupe by worktree (configuration server first). |
+| `GET /api/project` | Aggregate, dedupe by worktree (configuration server first). Names carry the owning server when more than one is exposed. |
 | `/api/project/:projectID/**` | Route by project index; unknown → configuration server. |
-| `GET /api/session` (no directory) | Aggregate pages; a synthetic cursor carries each server’s cursor. |
-| `GET /api/session?…directory` | Route to the directory owner. |
+| `GET /api/fs/list` (absolute path) | Add-project browser: `/` lists the exposed servers as `@server` roots, `/@server/…` browses that server, other absolute paths route by the longest known directory. |
+| `GET /api/session` (no directory) | Aggregate pages; a synthetic cursor carries each server’s cursor. Titles carry the owning server when more than one is exposed. |
+| `GET /api/session?…directory` | Route to the directory owner; titles carry the owning server. |
 | `/api/session/:sessionID/**` | Route by session index; unknown IDs are discovered with a bounded fan-out. |
 | `POST /api/session` | Read `location.directory`; route to that server; index the result. |
 | `GET /api/session/active` | Merge maps. |
 | `GET /api/permission/request`, `/api/form` | Merge `{data}` arrays; replies already carry `sessionID`, so they route by session. |
 | `GET/POST /api/pty…` | By directory; `GET /api/pty` without one aggregates. |
 | `/api/pty/:id/**`, persistent PTY, upgrades | Route by PTY index; unknown → configuration server. |
-| `/api/location`, `/api/fs/*`, `/api/vcs/*`, `/api/worktree*` | By directory or project ID. |
+| `/api/location`, other `/api/fs/*`, `/api/vcs/*`, `/api/worktree*` | By directory or project ID; an `@server` segment in the directory is mapped to that server's real path. |
 | `/api/config`, `/api/model`, `/api/agent`, `/api/command`, `/api/skill`, `/api/mcp`, `/api/provider`, `/api/integration`, `/api/credential`, `/api/experimental/*` | Configuration server. |
 | other `/api/*` | Configuration server, or the directory owner when the request carries a directory. |
 | non-`/api/*` | 404. |
@@ -132,6 +133,7 @@ The bridge keeps only routing indexes, never content:
 - `ptyID → server`
 - `projectID → server`
 - `directory → set(server)` (unique owner or ambiguous)
+- `server → filesystem anchor` (for `@server` browsing; `/`, or the server’s default location when `/` cannot be listed)
 - `savedPermissionID → server`
 
 They are learned from list responses, create responses and events. Removing a server drops its entries. A bridge restart leaves them empty; lists repopulate them, and a direct session request can discover its owner.

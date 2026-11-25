@@ -23,7 +23,14 @@ Removing a server from Desktop removes its projects and sessions from aggregated
 
 ## Server identity
 
-All sessions show the bridge as their server. They are distinguished by project path. Two machines using the same path are indistinguishable without opening a session.
+With more than one exposed server, project names and chat titles carry a `Server · ` prefix, and the add-project folder browser lists the servers as `@Server` roots. The bridge strips the prefix from a chat rename before writing it upstream; upstream projects and sessions keep their real names and titles.
+
+Folder browsing across machines is a bridge mapping, not an upstream path:
+
+- `/` lists the exposed servers when more than one is exposed.
+- `/@Server/…` maps to an absolute path on that server. The `@` namespace is reserved; a real top-level folder with the same name is shadowed.
+- The browser starts in the active project, so the server list is one **Up** away, and absolute folder listings also include the `@Server` entries.
+- A Windows server that cannot list `/` anchors its tree on its default location; browsing then stays inside that folder.
 
 ## Working directory on the bridge profile
 

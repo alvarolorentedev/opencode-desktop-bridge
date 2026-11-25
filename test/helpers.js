@@ -69,6 +69,16 @@ function createUpstream(name) {
         { id: `p${name}`, worktree: `/${name}`, canonical: `/${name}`, name: `Project ${name}` },
       ])
     }
+    if (url.pathname === "/api/fs/list") {
+      const path = url.searchParams.get("path") || "/"
+      return send(200, {
+        location: { directory: path },
+        data: [
+          { path: `${name}-child`, type: "directory" },
+          { path: `${name}.txt`, type: "file" },
+        ],
+      })
+    }
     if (url.pathname === "/api/session" && req.method === "GET") {
       return send(200, { data: [...sessions.values()], cursor: {} })
     }
@@ -91,7 +101,22 @@ function createUpstream(name) {
     if (session) {
       if (!session[2]) {
         const found = sessions.get(session[1])
-        return found ? send(200, { data: found }) : send(404, { message: "not found" })
+        if (!found) return send(404, { message: "not found" })
+        if (req.method === "PATCH") {
+          let raw = ""
+          req.on("data", (chunk) => (raw += chunk))
+          req.on("end", () => {
+            try {
+              const body = raw ? JSON.parse(raw) : {}
+              if (typeof body.title === "string") found.title = body.title
+            } catch {
+              // Keep the stored session on a malformed body.
+            }
+            send(200, { data: found })
+          })
+          return
+        }
+        return send(200, { data: found })
       }
       return send(200, { data: [{ id: "msg", sessionID: session[1], owner: name }] })
     }

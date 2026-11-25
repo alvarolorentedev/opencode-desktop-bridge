@@ -1141,6 +1141,9 @@ const __modules = {
       const saved = SAVED_PERMISSION_ROUTE.exec(pathname)
       if (saved) return { kind: "saved-permission", id: decode(saved[1]) }
     
+      if (pathname === "/api/fs/list") {
+        return { kind: "fs-list", directory: directoryFromQuery(searchParams), path: queryValue(searchParams, "path") }
+      }
       if (pathname.startsWith("/api/fs/") || pathname.startsWith("/api/experimental/fs/")) {
         return { kind: "directory", directory: directoryFromQuery(searchParams) }
       }
@@ -1678,6 +1681,7 @@ const __modules = {
         ptys: new Map(),
         projects: new Map(),
         directories: new Map(),
+        fsRoots: new Map(),
         saved: new Map(),
         attempts: new Map(),
         info: undefined,
@@ -1773,7 +1777,115 @@ const __modules = {
           const target = targetFor([...owners][0])
           if (target) return target
         }
-        return configTarget()
+        // Longest known ancestor keeps browsing inside an unlisted child of a known folder.
+        let best
+        let bestLength = -1
+        for (const [known, set] of state.directories) {
+          if (!known || !known.trim() || set.size !== 1) continue
+          const head = known.replace(/[\\/]+$/, "")
+          if (directory === known || directory.startsWith(`${head}/`) || directory.startsWith(`${head}\\`)) {
+            if (known.length > bestLength) {
+              best = [...set][0]
+              bestLength = known.length
+            }
+          }
+        }
+        return targetFor(best) || configTarget()
+      }
+    
+      function fsSegments(value) {
+        return String(value || "").split(/[\\/]+/).filter(Boolean)
+      }
+    
+      function fsServersActive() {
+        return targets().length > 1
+      }
+    
+      // Virtual roots are namespaced so a server name cannot be mistaken for a real folder.
+      function fsServers() {
+        const result = []
+        const counts = new Map()
+        for (const target of targets()) {
+          const base = String(target.name || target.id).replace(/[\\/@]/g, " ").replace(/\s+/g, " ").trim() || target.id
+          const count = counts.get(base) || 0
+          counts.set(base, count + 1)
+          result.push({ slug: `@${count ? `${base} (${count + 1})` : base}`, target })
+        }
+        return result
+      }
+    
+      function fsVirtual(directory) {
+        if (!fsServersActive()) return undefined
+        const segments = fsSegments(directory)
+        if (!segments.length) return undefined
+        const servers = fsServers()
+        for (let index = 0; index < segments.length; index += 1) {
+          const match = servers.find((item) => item.slug === segments[index])
+          if (match) return { target: match.target, rest: segments.slice(index + 1) }
+        }
+        return undefined
+      }
+    
+      function fsBase(target) {
+        const stored = state.fsRoots.get(target.id)
+        return typeof stored === "string" && stored ? stored : "/"
+      }
+    
+      function fsJoin(base, parts) {
+        const separator = String(base).includes("\\") ? "\\" : "/"
+        const head = String(base || "").replace(/[\\/]+$/, "")
+        if (!parts.length) return head || separator
+        return `${head}${separator}${parts.join(separator)}`
+      }
+    
+      function fsAbsolute(value) {
+        return typeof value === "string" && (value.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(value) || value.startsWith("\\\\"))
+      }
+    
+      function fsRoot(value) {
+        return value === "" || value === "/" || /^[a-zA-Z]:[\\/]?$/.test(value)
+      }
+    
+      function fsQuery(directory) {
+        const params = new URLSearchParams()
+        params.set("location[directory]", directory)
+        params.set("path", directory)
+        return `?${params.toString()}`
+      }
+    
+      function locationQuery(search, directory) {
+        const params = new URLSearchParams(search || "")
+        params.delete("directory")
+        params.delete("path")
+        params.set("location[directory]", directory)
+        const value = params.toString()
+        return value ? `?${value}` : ""
+      }
+    
+      function fsEntries(body) {
+        if (Array.isArray(body)) return body
+        if (body && typeof body === "object" && Array.isArray(body.data)) return body.data
+        return []
+      }
+    
+      function sendUpstream(res, result) {
+        if (result.body === undefined) {
+          res.writeHead(result.status, { "cache-control": "no-store" })
+          res.end()
+          return
+        }
+        sendJson(res, result.status, result.body)
+      }
+    
+      function fsEntryName(entry) {
+        const parts = entry && typeof entry.path === "string" ? fsSegments(entry.path) : []
+        if (parts.length) return parts[parts.length - 1]
+        return entry && typeof entry.name === "string" && entry.name ? entry.name : undefined
+      }
+    
+      function learnDirectory(directory, serverId) {
+        if (fsRoot(directory)) return
+        addDirectory(directory, serverId)
       }
     
       function dropServer(serverId) {
@@ -1781,6 +1893,7 @@ const __modules = {
         for (const [id, owner] of state.ptys) if (owner === serverId) state.ptys.delete(id)
         for (const [id, owner] of state.projects) if (owner === serverId) state.projects.delete(id)
         for (const [id, owner] of state.saved) if (owner === serverId) state.saved.delete(id)
+        state.fsRoots.delete(serverId)
         for (const [directory, owners] of state.directories) {
           owners.delete(serverId)
           if (!owners.size) state.directories.delete(directory)
@@ -1813,6 +1926,45 @@ const __modules = {
       function learnSessions(entry) {
         if (!entry || !entry.data || !Array.isArray(entry.data.data)) return
         for (const session of entry.data.data) indexSession(entry.serverId, session)
+      }
+    
+      function multipleServers() {
+        return targets().length > 1
+      }
+    
+      function serverName(serverId) {
+        const item = serversNow().find((server) => server.id === serverId)
+        return item && item.name ? item.name : serverId
+      }
+    
+      function withServerTitle(serverId, title) {
+        if (!multipleServers() || typeof title !== "string" || !title) return title
+        const prefix = `${serverName(serverId)} · `
+        return title.startsWith(prefix) ? title : `${prefix}${title}`
+      }
+    
+      function withoutServerTitle(serverId, title) {
+        if (!multipleServers() || typeof title !== "string") return title
+        const prefix = `${serverName(serverId)} · `
+        return title.startsWith(prefix) ? title.slice(prefix.length) : title
+      }
+    
+      function sessionTitle(serverId, session) {
+        if (!session || typeof session !== "object" || typeof session.id !== "string") return session
+        return { ...session, title: withServerTitle(serverId, session.title) }
+      }
+    
+      function sessionBody(serverId, body) {
+        if (!body || typeof body !== "object") return body
+        if (Array.isArray(body)) return body.map((session) => sessionTitle(serverId, session))
+        if (Array.isArray(body.data)) return { ...body, data: body.data.map((session) => sessionTitle(serverId, session)) }
+        if (body.data && typeof body.data === "object") return { ...body, data: sessionTitle(serverId, body.data) }
+        return sessionTitle(serverId, body)
+      }
+    
+      function baseName(value) {
+        const parts = fsSegments(value)
+        return parts.length ? parts[parts.length - 1] : String(value || "")
       }
     
       function credential(req, url) {
@@ -1963,7 +2115,17 @@ const __modules = {
           sendJson(res, 502, { message: "No OpenCode server is reachable." })
           return
         }
-        sendJson(res, 200, mergeProjects(entries).map((item) => item.project))
+        const many = multipleServers()
+        sendJson(
+          res,
+          200,
+          mergeProjects(entries).map((item) => {
+            if (!many) return item.project
+            const project = item.project
+            const label = typeof project.name === "string" && project.name ? project.name : baseName(project.worktree || project.canonical || project.id)
+            return { ...project, name: `${serverName(item.serverId)} · ${label}` }
+          }),
+        )
       }
     
       async function handleSessions(res, searchParams) {
@@ -2001,7 +2163,24 @@ const __modules = {
           return
         }
         const next = Object.keys(merged.next).length ? { next: encodeCursor(merged.next) } : {}
-        sendJson(res, 200, { data: merged.data.map((item) => item.session), cursor: next })
+        sendJson(res, 200, { data: merged.data.map((item) => sessionTitle(item.serverId, item.session)), cursor: next })
+      }
+    
+      async function handleDirectorySessions(res, directory, pathname, search) {
+        const target = pickDirectory(directory)
+        if (!target) {
+          sendJson(res, 503, { message: "No OpenCode server is reachable." })
+          return
+        }
+        try {
+          const result = await requestJson(target.endpoint, pathname, search, { timeoutMs: SESSION_TIMEOUT })
+          if (result.status >= 200 && result.status < 300) {
+            for (const session of itemsOf(result.body)) indexSession(target.id, session)
+          }
+          sendUpstream(res, { status: result.status, body: sessionBody(target.id, result.body) })
+        } catch (error) {
+          sendJson(res, 502, { message: "The OpenCode server is unavailable." })
+        }
       }
     
       async function handleActive(res) {
@@ -2082,6 +2261,40 @@ const __modules = {
           sendJson(res, 404, { message: "This session is no longer available." })
           return
         }
+        const item = /^\/(?:api|api\/experimental)\/session\/[^/]+\/?$/.test(pathname)
+        if (item && req.method === "GET") {
+          try {
+            const result = await requestJson(target.endpoint, pathname, search, { timeoutMs: SESSION_TIMEOUT })
+            sendUpstream(res, { status: result.status, body: sessionBody(target.id, result.body) })
+          } catch (error) {
+            sendJson(res, 502, { message: "The OpenCode server is unavailable." })
+          }
+          return
+        }
+        if (item && req.method === "PATCH") {
+          let body
+          try {
+            body = (await bufferJson(req, 1024 * 1024)).body
+          } catch (error) {
+            sendJson(res, 400, { message: errorMessage(error) })
+            return
+          }
+          const next = body && typeof body === "object" && !Array.isArray(body) ? body : {}
+          // The list shows a prefixed title; never write that prefix back upstream.
+          if (typeof next.title === "string") next.title = withoutServerTitle(target.id, next.title)
+          try {
+            const result = await requestJson(target.endpoint, pathname, search, {
+              method: "PATCH",
+              body: JSON.stringify(next),
+              headers: { "content-type": "application/json" },
+              timeoutMs: 30000,
+            })
+            sendUpstream(res, { status: result.status, body: sessionBody(target.id, result.body) })
+          } catch (error) {
+            sendJson(res, 502, { message: "The OpenCode server is unavailable." })
+          }
+          return
+        }
         proxy(req, res, target.endpoint, pathname, search)
       }
     
@@ -2094,30 +2307,121 @@ const __modules = {
         proxy(req, res, target.endpoint, pathname, search)
       }
     
+      async function listVirtualDirectory(res, virtual) {
+        const { target, rest } = virtual
+        let base = fsBase(target)
+        let directory = rest.length ? fsJoin(base, rest) : base
+        let result
+        try {
+          result = await requestJson(target.endpoint, "/api/fs/list", fsQuery(directory), { timeoutMs: SESSION_TIMEOUT })
+        } catch (error) {
+          sendJson(res, 502, { message: "The OpenCode server is unavailable." })
+          return
+        }
+        // Windows servers cannot list "/"; anchor their tree on the default location instead.
+        if ((result.status < 200 || result.status >= 300) && !rest.length && fsRoot(base)) {
+          const fallback = await requestJson(target.endpoint, "/api/location", "", { timeoutMs: SESSION_TIMEOUT }).catch(() => undefined)
+          const location = fallback && fallback.body && typeof fallback.body.data === "object" ? fallback.body.data : fallback && fallback.body
+          const directoryFallback = location && typeof location.directory === "string" ? location.directory : undefined
+          if (directoryFallback) {
+            base = directoryFallback
+            directory = base
+            try {
+              result = await requestJson(target.endpoint, "/api/fs/list", fsQuery(directory), { timeoutMs: SESSION_TIMEOUT })
+            } catch (error) {
+              sendJson(res, 502, { message: "The OpenCode server is unavailable." })
+              return
+            }
+          }
+        }
+        if (result.status < 200 || result.status >= 300) {
+          sendJson(res, result.status, result.body || { message: "The OpenCode server is unavailable." })
+          return
+        }
+        if (!rest.length) state.fsRoots.set(target.id, base)
+        learnDirectory(directory, target.id)
+        const data = []
+        for (const entry of fsEntries(result.body)) {
+          const name = fsEntryName(entry)
+          if (name) data.push({ path: name, type: entry.type === "directory" ? "directory" : "file" })
+        }
+        sendJson(res, 200, { location: { directory }, data })
+      }
+    
+      // The phone's add-project browser asks for absolute paths. Serve them across
+      // servers: "/" names the exposed servers, "/@server/..." browses one machine.
+      async function handleFsList(req, res, classified, search) {
+        const path = classified.path
+        if (!fsAbsolute(path)) {
+          await routeDirectory(req, res, classified, "/api/fs/list", search)
+          return
+        }
+        if (fsServersActive() && fsRoot(path)) {
+          sendJson(res, 200, {
+            location: { directory: "/" },
+            data: fsServers().map(({ slug }) => ({ path: slug, type: "directory" })),
+          })
+          return
+        }
+        const virtual = fsVirtual(path)
+        if (virtual) {
+          await listVirtualDirectory(res, virtual)
+          return
+        }
+        const target = pickDirectory(path)
+        if (!target) {
+          sendJson(res, 503, { message: "No OpenCode server is reachable." })
+          return
+        }
+        try {
+          const result = await requestJson(target.endpoint, "/api/fs/list", fsQuery(path), { timeoutMs: SESSION_TIMEOUT })
+          if (result.status < 200 || result.status >= 300) {
+            sendJson(res, result.status, result.body || { message: "The OpenCode server is unavailable." })
+            return
+          }
+          learnDirectory(path, target.id)
+          const body = result.body && typeof result.body === "object" && !Array.isArray(result.body) ? result.body : {}
+          const data = [...fsEntries(body)]
+          if (fsServersActive()) for (const { slug } of fsServers()) data.push({ path: slug, type: "directory" })
+          sendJson(res, 200, { ...body, data })
+        } catch (error) {
+          sendJson(res, 502, { message: "The OpenCode server is unavailable." })
+        }
+      }
+    
       async function routeDirectory(req, res, classified, pathname, search) {
+        const virtual = fsVirtual(classified.directory)
         let target
-        if (classified.projectID) target = targetFor(state.projects.get(classified.projectID))
-        if (!target && classified.directory) target = pickDirectory(classified.directory)
-        if (!target) target = configTarget()
+        let routeSearch = search
+        if (virtual) {
+          target = virtual.target
+          const directory = virtual.rest.length ? fsJoin(fsBase(virtual.target), virtual.rest) : fsBase(virtual.target)
+          routeSearch = locationQuery(search, directory)
+        } else {
+          if (classified.projectID) target = targetFor(state.projects.get(classified.projectID))
+          if (!target && classified.directory) target = pickDirectory(classified.directory)
+          if (!target) target = configTarget()
+        }
         if (!target) {
           sendJson(res, 503, { message: "No OpenCode server is reachable." })
           return
         }
         if (pathname === "/api/location" && req.method === "GET") {
           try {
-            const result = await requestJson(target.endpoint, pathname, search, { timeoutMs: SESSION_TIMEOUT })
+            const result = await requestJson(target.endpoint, pathname, routeSearch, { timeoutMs: SESSION_TIMEOUT })
             const location = result.body && result.body.data && typeof result.body.data === "object" ? result.body.data : result.body
             if (result.status >= 200 && result.status < 300 && location && location.project) {
               indexProject(target.id, location.project)
-              if (typeof location.directory === "string") addDirectory(location.directory, target.id)
+              if (typeof location.directory === "string") learnDirectory(location.directory, target.id)
             }
-            sendJson(res, result.status, result.body || {})
+            if (virtual && location && typeof location.directory === "string") learnDirectory(location.directory, target.id)
+            sendUpstream(res, result)
           } catch (error) {
             sendJson(res, 502, { message: "The OpenCode server is unavailable." })
           }
           return
         }
-        proxy(req, res, target.endpoint, pathname, search)
+        proxy(req, res, target.endpoint, pathname, routeSearch)
       }
     
       async function createSession(req, res, pathname, search, queryDirectory) {
@@ -2278,9 +2582,7 @@ const __modules = {
           }
           case "sessions":
             if (classified.directory) {
-              const target = pickDirectory(classified.directory)
-              if (!target) return sendJson(res, 503, { message: "No OpenCode server is reachable." })
-              proxy(req, res, target.endpoint, pathname, search)
+              await handleDirectorySessions(res, classified.directory, pathname, search)
               return
             }
             await handleSessions(res, url.searchParams)
@@ -2327,6 +2629,9 @@ const __modules = {
           case "location":
           case "directory":
             await routeDirectory(req, res, classified, pathname, search)
+            return
+          case "fs-list":
+            await handleFsList(req, res, classified, search)
             return
           case "config":
           default: {
