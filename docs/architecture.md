@@ -109,7 +109,7 @@ Using the sidecar code as proof means the native pairing service remains the aut
 | `GET /api/event` | One upstream event stream per exposed server per client, merged and forwarded byte-for-byte. |
 | `GET /api/project` | Aggregate, dedupe by worktree (configuration server first). Names carry the owning server when more than one is exposed. |
 | `/api/project/:projectID/**` | Route by project index; unknown → configuration server. |
-| `GET /api/fs/list` (absolute path) | Add-project browser: `/` lists the exposed servers as `@server` roots, `/@server/…` browses that server, other absolute paths route by the longest known directory. |
+| `GET /api/fs/list` (absolute path) | Add-project browser: `/` and the browser's first listing show the exposed servers as `@server` roots, `/@server/…` browses that server, other absolute paths route by the longest known directory. |
 | `GET /api/session` (no directory) | Aggregate pages; a synthetic cursor carries each server’s cursor. Titles carry the owning server when more than one is exposed. |
 | `GET /api/session?…directory` | Route to the directory owner; titles carry the owning server. |
 | `/api/session/:sessionID/**` | Route by session index; unknown IDs are discovered with a bounded fan-out. |

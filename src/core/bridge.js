@@ -716,14 +716,17 @@ function createBridge(options) {
       await routeDirectory(req, res, classified, "/api/fs/list", search)
       return
     }
-    if (fsServersActive() && fsRoot(path)) {
+    const virtual = fsVirtual(path)
+    // "/" is the server list. The add-project browser also seeds its location
+    // with the first folder, so that first listing opens on the servers too.
+    const roots = fsServersActive() && !virtual && (fsRoot(path) || classified.directory === path)
+    if (roots) {
       sendJson(res, 200, {
-        location: { directory: "/" },
+        location: { directory: path },
         data: fsServers().map(({ slug }) => ({ path: slug, type: "directory" })),
       })
       return
     }
-    const virtual = fsVirtual(path)
     if (virtual) {
       await listVirtualDirectory(res, virtual)
       return

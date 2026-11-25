@@ -80,7 +80,7 @@ One normal OpenCode v2 server:
 
 - projects and sessions from every exposed server, merged;
 - with more than one exposed server, project names and chat titles are prefixed with the owning server (`Studio · billing`), so the phone can tell them apart;
-- the add-project folder browser browses every exposed server: `/` lists the servers as `@Studio` folders, and `@Studio/…` browses that machine;
+- the add-project folder browser opens on the server roots when more than one server is exposed: `/` and the browser's first listing show `@Studio`, `@Laptop`, … and `@Studio/…` browses that machine;
 - messages, prompts, streaming, permissions, questions, todos and diffs, routed to the owning server;
 - terminals and WebSockets, tunneled to the owning server;
 - files, VCS and worktrees for the project on screen;
@@ -157,7 +157,7 @@ The single-server view is an aggregation, not a new OpenCode engine.
 - **Global configuration comes from one server** (Desktop’s own by default). A session on another server may use a model or agent that the selected configuration server does not list. Existing sessions keep working with their current model; changing models or creating a session with an unsupported model can fail.
 - **Duplicate project paths** on two machines collapse into one project. New sessions and file operations for that path go to the configuration server.
 - **Server names are display-only.** With more than one server, project names and chat titles carry a `Server · ` prefix and the folder browser uses `@Server` roots; the real upstream names and titles are unchanged. Renaming a chat strips the prefix before it reaches the server.
-- **The folder browser starts in the active project.** Tap **Up** to `/` (or type `/`) to see the server folders; while browsing an absolute folder, the `@Server` entries are also listed so you can switch machines without going up.
+- **The add-project browser opens on the server roots.** When more than one server is exposed, its first folder listing shows the `@Server` entries instead of the active project's contents; choose a server to browse that machine. Absolute folder listings also include the `@Server` entries.
 - **A real folder named `@Server` is shadowed** by the matching server root. Use **Enter path manually** to reach it.
 - **Windows server roots fall back to the server’s default location** when `/` cannot be listed; `@Server/…` browsing then stays inside that default folder.
 - **Duplicate server URLs** collapse in the catalog by URL. Desktop wins over TUI and web entries.

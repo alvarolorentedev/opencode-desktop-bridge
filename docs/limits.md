@@ -29,7 +29,7 @@ Folder browsing across machines is a bridge mapping, not an upstream path:
 
 - `/` lists the exposed servers when more than one is exposed.
 - `/@Server/…` maps to an absolute path on that server. The `@` namespace is reserved; a real top-level folder with the same name is shadowed.
-- The browser starts in the active project, so the server list is one **Up** away, and absolute folder listings also include the `@Server` entries.
+- The add-project browser opens on the server roots, so the first listing is the server list; absolute folder listings also include the `@Server` entries.
 - A Windows server that cannot list `/` anchors its tree on its default location; browsing then stays inside that folder.
 
 ## Working directory on the bridge profile

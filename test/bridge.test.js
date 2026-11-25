@@ -160,6 +160,9 @@ test("bridge aggregates, routes, pairs and survives registry changes", async (t)
   const fsRoot = await request(bridge.port, "/api/fs/list?path=%2F", { headers: auth })
   assert.deepEqual(fsRoot.body.data.map((entry) => entry.path), ["@A", "@B"])
 
+  const fsSeeded = await request(bridge.port, "/api/fs/list?location%5Bdirectory%5D=%2Fa&path=%2Fa", { headers: auth })
+  assert.deepEqual(fsSeeded.body.data.map((entry) => entry.path), ["@A", "@B"])
+
   const fsServerRoot = await request(bridge.port, "/api/fs/list?path=%2F%40B", { headers: auth })
   assert.deepEqual(fsServerRoot.body.data.map((entry) => entry.path), ["b-child", "b.txt"])
   assert.ok(upstreamB.calls.some((call) => call.path === "/api/fs/list" && call.search.includes("path=%2F")))
